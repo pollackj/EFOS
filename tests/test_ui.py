@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTime, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QLabel, QPushButton
 
 from efos_app.models import NodeKind, NodeRef, TaskState
 from efos_app.rag_service import PRIORITY_PROMPT
+from efos_app.ui.dialogs import AvailabilityDialog
 from efos_app.ui.graph import LayoutStore
 from efos_app.ui.main_window import MainWindow
 from efos_app.ui.theme import current_theme
@@ -106,18 +107,18 @@ def test_registry_typed_sorting_and_autocomplete(service, qapp):
     ]
     assert states == sorted(states)
     assert states == [
-        "Available",
-        "Available",
+        "Blocked",
         "Completed",
         "Deferred",
-        "Unavailable",
+        "Ready",
+        "Ready",
     ]
     assert "▲" in registry.table.horizontalHeaderItem(1).text()
 
     registry._sort_by_column(1)  # state descending
     qapp.processEvents()
     assert registry.table.horizontalHeaderItem(1).text().endswith("▼")
-    assert registry.table.item(0, 1).text() == "Unavailable"
+    assert registry.table.item(0, 1).text() == "Ready"
 
     registry._sort_by_column(2)  # conditions numeric count
     qapp.processEvents()
@@ -157,7 +158,7 @@ def test_assistant_launchpad_presets_custom_and_priority(service, qapp):
     assert chat.launch_scroll.isVisible()
     texts = _buttons(chat)
     for preset in (
-        "Which Tasks are available now?",
+        "Which Tasks are ready now?",
         "List active Projects",
         "What conditions are unknown?",
         PRIORITY_PROMPT,
@@ -405,5 +406,63 @@ def test_theme_toggle_is_persisted_and_rebuilds_light_theme(service, qapp):
     window.toggle_theme()
     qapp.processEvents()
     assert current_theme() == before
+    window.close()
+    qapp.processEvents()
+
+
+def test_availability_dialog_and_status_are_presented_separately(service, qapp):
+    task = service.create_task("Business call")
+    scheduled_start = datetime.now().replace(microsecond=0) + timedelta(days=2)
+    service.save_task_schedule(
+        task, scheduled_start, scheduled_start + timedelta(hours=1)
+    )
+
+    dialog = AvailabilityDialog([], None)
+    qapp.processEvents()
+    assert dialog.always.isChecked()
+    dialog._validate()
+    assert dialog.values() == []
+
+    dialog.always.setChecked(False)
+    assert len(dialog._rows) == 1
+    row = dialog._rows[0]
+    for weekday, check in row["checks"].items():
+        check.setChecked(weekday == 0)
+    row["start"].setTime(QTime(9, 0))
+    row["end"].setTime(QTime(17, 0))
+    dialog._validate()
+    values = dialog.values()
+    assert len(values) == 1
+    assert values[0].weekday == 0
+    assert values[0].start_minute == 9 * 60
+    assert values[0].end_minute == 17 * 60
+    service.save_task_availability(task, values)
+    stored = service.load_view().snapshot.tasks[task]
+    assert stored.has_custom_availability is True
+
+    window = _window(service, qapp, "availability.json")
+    window.dashboard.select_manage(NodeRef(NodeKind.TASK, task))
+    qapp.processEvents()
+    inspector = window.dashboard.manage_inspector
+    labels = _labels(inspector)
+    for field in ("Status", "Availability", "Schedule", "Recurrence"):
+        assert field in labels
+    # A Ready Task scheduled in the future remains Ready.
+    assert "Ready" in labels
+
+    gate = service.create_condition("Future gate", evaluation_state=False)
+    blocked = service.create_task("Gated future task")
+    service.save_task_schedule(
+        blocked, scheduled_start, scheduled_start + timedelta(hours=1)
+    )
+    service.connect(
+        NodeRef(NodeKind.CONDITION, gate), NodeRef(NodeKind.TASK, blocked)
+    )
+    window.refresh_all()
+    window.dashboard.select_manage(NodeRef(NodeKind.TASK, blocked))
+    qapp.processEvents()
+    labels = _labels(window.dashboard.manage_inspector)
+    assert "Blocked" in labels
+    assert not any("Scheduled window" in text for text in labels)
     window.close()
     qapp.processEvents()

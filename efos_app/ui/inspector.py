@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
@@ -26,8 +27,19 @@ from PyQt6.QtWidgets import (
 )
 
 from ..errors import EFOSError
-from ..formatting import fmt_datetime, fmt_relative, schedule_span, truncate
-from ..logic import condition_truth_label, gate_summary
+from ..formatting import (
+    fmt_datetime,
+    fmt_relative,
+    recurrence_span,
+    schedule_span,
+    truncate,
+)
+from ..logic import (
+    availability_state_text,
+    availability_summary,
+    condition_truth_label,
+    gate_summary,
+)
 from ..models import (
     Condition,
     Edge,
@@ -41,6 +53,7 @@ from ..models import (
 )
 from ..service import EFOSService, WorkspaceView
 from .dialogs import (
+    AvailabilityDialog,
     RecurrenceDialog,
     ScheduleConflictDialog,
     confirm_dialog,
@@ -107,6 +120,10 @@ class InspectorPanel(QFrame):
         self.content = QVBoxLayout(self.host)
         self.content.setContentsMargins(18, 16, 18, 18)
         self.content.setSpacing(12)
+        # The inspector scrolls vertically. Keep every row and button at its
+        # minimum legible height instead of compressing the whole column when a
+        # Task has many sections (Status, Availability, Schedule, Recurrence…).
+        self.content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.scroll.setWidget(self.host)
         self.setMinimumWidth(300)
         self.setMaximumWidth(420)
@@ -344,22 +361,18 @@ class InspectorPanel(QFrame):
         )
 
         status = self.view.evaluation.task_status(task.id)
-        if task.current_state is TaskState.UNAVAILABLE:
-
-            # Check if the unavailability is triggered strictly by the temporal window constraint
-            now = datetime.now()
-            if task.scheduled_start and now < task.scheduled_start:
-                if task.scheduled_start.date() == now.date() + timedelta(days=1):
-                    msg = f"Locked · Scheduled window has not started yet. (Opens tomorrow at {task.scheduled_start.strftime('%I:%M %p')})"
-                elif task.scheduled_start.date() == now.date():
-                    msg = f"Locked · Scheduled window has not started yet. (Opens today at {task.scheduled_start.strftime('%I:%M %p')})"
-                else:
-                    msg = f"Locked · Scheduled window has not started yet. (Opens on {task.scheduled_start.strftime('%b %d at %I:%M %p')})"
-            elif task.scheduled_end and now > task.scheduled_end:
-                msg = "Locked · Scheduled window closure timeline has expired."
+        if task.current_state is TaskState.BLOCKED:
+            if status.ready:
+                msg = (
+                    "Blocked · no unsatisfied dependency was found. Run Recompute to "
+                    "re-derive the Task's Status."
+                )
+            elif status.blockers:
+                msg = "Blocked · " + "; ".join(status.blockers[:3])
+                if len(status.blockers) > 3:
+                    msg += f"; and {len(status.blockers) - 3} more"
             else:
-                msg = "Locked · every precondition must be TRUE and every prerequisite completed or resolved before this task can be completed."
-
+                msg = "Blocked · an unsatisfied dependency prevents Ready Status."
             lock = QLabel(msg)
             lock.setWordWrap(True)
             lock.setStyleSheet(
@@ -369,23 +382,44 @@ class InspectorPanel(QFrame):
             )
             self.content.addWidget(lock)
 
+        now = datetime.now()
+        if task.has_custom_availability:
+            availability_line = (
+                f"{availability_summary(task.availability)} · "
+                f"{availability_state_text(task.availability, now)}"
+            )
+        else:
+            availability_line = "24/7 — always available"
         meta = [
-            ("State", task.current_state.label),
-            ("Previous", task.previous_state.label if task.previous_state else "—"),
-            ("Requirements", gate_summary(self.view.snapshot, self.view.evaluation, self.ref)),
+            ("Status", task.current_state.label),
+            ("Availability", availability_line),
             ("Schedule", schedule_span(task)),
+            ("Recurrence", recurrence_span(task)),
+            ("Requirements", gate_summary(self.view.snapshot, self.view.evaluation, self.ref)),
+            ("Previous", task.previous_state.label if task.previous_state else "—"),
             ("Created", fmt_relative(task.created_at)),
         ]
         for key, value in meta:
             self.content.addWidget(_kv(key, value))
 
+        if task.current_state.is_active:
+            availability_row = QHBoxLayout()
+            availability_row.setSpacing(7)
+            edit_availability = QPushButton("Edit availability…")
+            edit_availability.clicked.connect(
+                lambda _=False, task_id=task.id: self._edit_availability(task_id)
+            )
+            availability_row.addWidget(edit_availability)
+            availability_row.addStretch(1)
+            self.content.addLayout(availability_row)
+
         actions = QHBoxLayout()
         actions.setSpacing(7)
-        if task.current_state is TaskState.AVAILABLE:
+        if task.current_state is TaskState.READY:
             complete = QPushButton("Complete task")
             complete.setProperty("variant", "primary")
             complete.setIcon(icon("check", "#FFFFFF", 14))
-            complete.setEnabled(status.available)
+            complete.setEnabled(status.ready)
             complete.clicked.connect(lambda: self._complete_task(task.id))
             actions.addWidget(complete)
         if task.current_state.is_active:
@@ -520,6 +554,21 @@ class InspectorPanel(QFrame):
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Recurrence saved")
+
+    def _edit_availability(self, task_id: str) -> None:
+        task = self.view.snapshot.tasks.get(task_id) if self.view else None
+        if task is None:
+            return
+        self.commit_note()
+        dialog = AvailabilityDialog(task.availability, self)
+        if not dialog.exec():
+            return
+        try:
+            self.service.save_task_availability(task_id, dialog.values())
+        except EFOSError as exc:
+            self.toast_requested.emit(str(exc), "error")
+            return
+        self.mutated.emit("Availability saved · Status unchanged")
 
     def _render_schedule(self, task: Task) -> None:
         self.content.addWidget(Divider())
@@ -670,7 +719,7 @@ class InspectorPanel(QFrame):
 
         status = self.view.evaluation.project_status(project.id)
         meta = [
-            ("State", project.current_state.label),
+            ("Status", project.current_state.label),
             ("Previous", project.previous_state.label if project.previous_state else "—"),
             ("Requirements", gate_summary(self.view.snapshot, self.view.evaluation, self.ref)),
             ("Satisfied", f"{status.satisfied} of {status.total}"),
@@ -859,15 +908,15 @@ class InspectorPanel(QFrame):
                 layout.addWidget(remove)
             self.content.addWidget(row)
 
-        available = [
+        ready = [
             condition
             for condition in snapshot.conditions.values()
             if condition.id not in preconditions
         ]
-        if editable and available:
+        if editable and ready:
             combo = QComboBox()
             for condition in sorted(
-                available, key=lambda item: item.display_name.casefold()
+                ready, key=lambda item: item.display_name.casefold()
             ):
                 combo.addItem(condition.display_name, condition.id)
             add_row = QHBoxLayout()
@@ -1024,7 +1073,7 @@ class InspectorPanel(QFrame):
             "Dependencies are flat and conjunctive. A Precondition is an external "
             "three-valued fact. A Prerequisite is an internal entity state: a source "
             "Task must be completed, or a source Project resolved. Every attached "
-            "dependency must pass; no manual availability override exists."
+            "dependency must pass; no manual status override exists."
         )
         model.setWordWrap(True)
         model.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
@@ -1038,7 +1087,7 @@ class InspectorPanel(QFrame):
             "Task or Project target; this inserts a public.task_prerequisites or "
             "public.project_prerequisites row.\n"
             "3. Directionality: every arrow is an operational execution path. A "
-            "source node contributes directly to a target node's availability or "
+            "source node contributes directly to a target node's status or "
             "resolution. Lines never represent parent-child or organizational "
             "membership."
         )

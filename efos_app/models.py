@@ -11,23 +11,23 @@ class StrEnum(str, Enum):
         return self.value
 
 class TaskState(StrEnum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
+    READY = "ready"
+    BLOCKED = "blocked"
     COMPLETED = "completed"
     DEFERRED = "deferred"
 
     @property
     def label(self) -> str:
         return {
-            "available": "Available",
-            "unavailable": "Unavailable",
+            "ready": "Ready",
+            "blocked": "Blocked",
             "completed": "Completed",
             "deferred": "Deferred",
         }[self.value]
 
     @property
     def is_active(self) -> bool:
-        return self in (TaskState.AVAILABLE, TaskState.UNAVAILABLE)
+        return self in (TaskState.READY, TaskState.BLOCKED)
 
     @property
     def is_terminal(self) -> bool:
@@ -97,6 +97,23 @@ class NodeRef:
     def parse(cls, key: str) -> "NodeRef":
         kind_text, object_id = key.split(":", 1)
         return cls(NodeKind(kind_text), object_id)
+
+@dataclass(frozen=True, slots=True)
+class AvailabilityWindow:
+    """One local-time window during which a Task can actually be performed.
+
+    ``weekday`` follows ``datetime.weekday()`` (0 = Monday, 6 = Sunday).
+    ``start_minute``/``end_minute`` are minutes after local midnight; the end is
+    exclusive. A Task with no windows is available 24/7.
+    """
+
+    weekday: int
+    start_minute: int
+    end_minute: int
+
+    @property
+    def key(self) -> tuple[int, int, int]:
+        return (self.weekday, self.start_minute, self.end_minute)
 
 @dataclass(frozen=True, slots=True)
 class Edge:
@@ -170,33 +187,26 @@ class Task:
     id: str
     name: str
     is_recurring: bool = False
-    current_state: TaskState = TaskState.AVAILABLE
+    current_state: TaskState = TaskState.READY
     previous_state: TaskState | None = None
     created_at: datetime | None = None
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     recurrence: RecurrenceRule | None = None
+    availability: list[AvailabilityWindow] = field(default_factory=list)
 
     @property
     def has_schedule(self) -> bool:
         return self.scheduled_start is not None and self.scheduled_end is not None
 
     @property
-    def operational(self) -> bool:
-        return self.current_state.is_active
+    def has_custom_availability(self) -> bool:
+        """True when the Task does not use the 24/7 default."""
+        return bool(self.availability)
 
     @property
-    def is_currently_actionable(self) -> bool:
-        """
-        True if the task is available AND the current system clock 
-        has passed the scheduled start time.
-        """
-        from datetime import datetime
-        if self.current_state.value != "available":  # Matches the enum string check
-            return False
-        if self.scheduled_start and self.scheduled_start > datetime.now():
-            return False
-        return True
+    def operational(self) -> bool:
+        return self.current_state.is_active
 
 @dataclass(slots=True)
 class Project:
@@ -394,7 +404,7 @@ class WorkspaceSnapshot:
 
 @dataclass(slots=True)
 class EntityStatus:
-    available: bool = True
+    ready: bool = True
     precondition_values: dict[str, bool | None] = field(default_factory=dict)
     prerequisite_values: dict[NodeRef, bool] = field(default_factory=dict)
     blockers: list[str] = field(default_factory=list)
@@ -536,6 +546,7 @@ PUBLIC_TABLES = (
     "task_prerequisites",
     "project_prerequisites",
     "task_recurrence_rules",
+    "task_availability_windows",
     "notes",
     "task_notes",
     "project_notes",

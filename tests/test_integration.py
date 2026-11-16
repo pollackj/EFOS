@@ -20,6 +20,7 @@ from efos_app.errors import (
     ValidationError,
 )
 from efos_app.models import (
+    AvailabilityWindow,
     Edge,
     EdgeKind,
     NodeKind,
@@ -29,7 +30,6 @@ from efos_app.models import (
     TaskState,
 )
 from efos_app.service import EFOSService
-
 
 def test_schema_bootstrap_and_connection(service):
     counts = service.repo.schema_counts()
@@ -41,6 +41,7 @@ def test_schema_bootstrap_and_connection(service):
         "project_preconditions",
         "task_prerequisites",
         "project_prerequisites",
+        "task_availability_windows",
         "events",
         "notes",
         "assistant_threads",
@@ -51,56 +52,50 @@ def test_schema_bootstrap_and_connection(service):
     assert status.connected
     assert status.metadata == service.config.db_display
 
-
-def test_conjunctive_availability_and_bypass_prevention(service):
+def test_conjunctive_status_and_bypass_prevention(service):
     first = service.create_condition("First", evaluation_state=True)
     second = service.create_condition("Second", evaluation_state=False)
     task = service.create_task("Gated work")
     service.connect(NodeRef(NodeKind.CONDITION, first), NodeRef(NodeKind.TASK, task))
     service.connect(NodeRef(NodeKind.CONDITION, second), NodeRef(NodeKind.TASK, task))
     view = service.load_view()
-    assert view.snapshot.tasks[task].current_state is TaskState.UNAVAILABLE
+    assert view.snapshot.tasks[task].current_state is TaskState.BLOCKED
     assert not view.gate_for_task(task)
 
     with pytest.raises(ConflictError):
         service.complete_task(task)
-    # The database itself refuses an unearned transition into available.
+    # The database itself refuses an unearned transition into ready.
     with pytest.raises(pg_errors.CheckViolation):
         with service.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE public.tasks SET current_state = 'available'::public.task_state "
+                    "UPDATE public.tasks SET current_state = 'ready'::public.task_state "
                     "WHERE id = %s::uuid",
                     (task,),
                 )
 
     service.set_condition_value(second, True)
     view = service.load_view()
-    assert view.snapshot.tasks[task].current_state is TaskState.AVAILABLE
+    assert view.snapshot.tasks[task].current_state is TaskState.READY
     assert view.gate_for_task(task)
     service.set_condition_value(first, None)
-    assert (
-        service.load_view().snapshot.tasks[task].current_state
-        is TaskState.UNAVAILABLE
-    )
-
+    assert (service.load_view().snapshot.tasks[task].current_state is TaskState.BLOCKED)
 
 def test_prerequisite_source_states(service):
     source = service.create_task("Source")
     target = service.create_task("Target")
     service.connect(NodeRef(NodeKind.TASK, source), NodeRef(NodeKind.TASK, target))
     view = service.load_view()
-    assert view.snapshot.tasks[target].current_state is TaskState.UNAVAILABLE
+    assert view.snapshot.tasks[target].current_state is TaskState.BLOCKED
     service.complete_task(source)
     view = service.load_view()
     assert view.snapshot.tasks[source].current_state is TaskState.COMPLETED
-    assert view.snapshot.tasks[target].current_state is TaskState.AVAILABLE
+    assert view.snapshot.tasks[target].current_state is TaskState.READY
 
     service.reopen_task(source)
     view = service.load_view()
-    assert view.snapshot.tasks[source].current_state is TaskState.AVAILABLE
-    assert view.snapshot.tasks[target].current_state is TaskState.UNAVAILABLE
-
+    assert view.snapshot.tasks[source].current_state is TaskState.READY
+    assert view.snapshot.tasks[target].current_state is TaskState.BLOCKED
 
 def test_project_unknown_flag_and_auto_resolution(service):
     project = service.create_project("Launch")
@@ -117,7 +112,6 @@ def test_project_unknown_flag_and_auto_resolution(service):
     service.set_condition_value(condition, True)
     view = service.load_view()
     assert view.snapshot.projects[project].current_state is ProjectState.RESOLVED
-
 
 def test_shelved_and_stalled_projects_do_not_auto_resolve(service):
     condition = service.create_condition("Ready", evaluation_state=True)
@@ -159,21 +153,16 @@ def test_database_rejects_forced_resolution(service):
 def test_dependency_removal_cascade_and_event(service):
     source = service.create_task("Source")
     target = service.create_task("Target")
-    edge = Edge(
-        NodeRef(NodeKind.TASK, source),
-        NodeRef(NodeKind.TASK, target),
-        EdgeKind.PREREQUISITE,
-    )
+    edge = Edge(NodeRef(NodeKind.TASK, source), NodeRef(NodeKind.TASK, target), EdgeKind.PREREQUISITE)
     service.connect(edge.source, edge.target)
-    assert service.load_view().snapshot.tasks[target].current_state is TaskState.UNAVAILABLE
+    assert service.load_view().snapshot.tasks[target].current_state is TaskState.BLOCKED
     service.disconnect(edge)
     view = service.load_view()
-    assert view.snapshot.tasks[target].current_state is TaskState.AVAILABLE
+    assert view.snapshot.tasks[target].current_state is TaskState.READY
     events = service.repo.list_events()
     assert any(event["event_type"] == "dependency.removed" for event in events)
     # The source record is untouched.
-    assert view.snapshot.tasks[source].current_state is TaskState.AVAILABLE
-
+    assert view.snapshot.tasks[source].current_state is TaskState.READY
 
 def test_notes_blur_semantics_and_atomic_cascade(service):
     task = service.create_task("Note target")
@@ -184,18 +173,11 @@ def test_notes_blur_semantics_and_atomic_cascade(service):
     assert service.get_note(ref) == "First content"
     service.save_note(ref, "Updated content")
     assert service.get_note(ref) == "Updated content"
-    note_ids = service.db.fetch_all(
-        "SELECT note_id FROM public.task_notes WHERE task_id = %s::uuid", (task,)
-    )
+    note_ids = service.db.fetch_all("SELECT note_id FROM public.task_notes WHERE task_id = %s::uuid", (task,))
     assert len(note_ids) == 1
     service.delete_task(task)
-    assert service.db.fetch_one(
-        "SELECT 1 FROM public.notes WHERE id = %s::uuid", (note_ids[0]["note_id"],)
-    ) is None
-    assert service.db.fetch_one(
-        "SELECT 1 FROM public.task_notes WHERE task_id = %s::uuid", (task,)
-    ) is None
-
+    assert service.db.fetch_one("SELECT 1 FROM public.notes WHERE id = %s::uuid", (note_ids[0]["note_id"],)) is None
+    assert service.db.fetch_one("SELECT 1 FROM public.task_notes WHERE task_id = %s::uuid", (task,)) is None
 
 def test_events_are_append_only_and_survive_deletion(service):
     task = service.create_task("Audited")
@@ -204,10 +186,7 @@ def test_events_are_append_only_and_survive_deletion(service):
     with pytest.raises(pg_errors.CheckViolation):
         with service.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE public.events SET summary = 'tampered' WHERE id = %s",
-                    (event_id,),
-                )
+                cur.execute("UPDATE public.events SET summary = 'tampered' WHERE id = %s", (event_id,))
     with pytest.raises(pg_errors.CheckViolation):
         with service.db.connection() as conn:
             with conn.cursor() as cur:
@@ -232,7 +211,7 @@ def test_recurrence_reset_is_idempotent(service):
     )
     results = service.recurrence_pulse(now)
     assert any(item[2] == "reset" for item in results)
-    assert service.repo.get_task(task).current_state is TaskState.AVAILABLE
+    assert service.repo.get_task(task).current_state is TaskState.READY
     resets = [
         event
         for event in service.repo.list_events(limit=1000)
@@ -283,7 +262,7 @@ def test_scheduler_pulse_runs_recurrence_and_reconciliation(service):
     )
     results, changes = service.pulse(now)
     assert any(item[2] == "reset" for item in results)
-    assert service.repo.get_task(task).current_state is TaskState.AVAILABLE
+    assert service.repo.get_task(task).current_state is TaskState.READY
 
 
 def test_assistant_thread_fifo(service, monkeypatch):
@@ -306,9 +285,7 @@ def test_custom_query_metadata_disconnect(service):
     queries = service.custom_queries()
     assert queries[0].label == "Overdue Audit"
     assert queries[0].prompt == "A much longer backend prompt"
-    service.update_custom_query(
-        query_id, label="Audit", prompt="Prompt two", favorite=True
-    )
+    service.update_custom_query(query_id, label="Audit", prompt="Prompt two", favorite=True)
     queries = service.custom_queries()
     assert queries[0].label == "Audit"
     assert queries[0].favorite is True
@@ -322,9 +299,7 @@ def test_calendar_cache_collision_and_stale_state(service):
     start = datetime.now().replace(microsecond=0) + timedelta(hours=1)
     end = start + timedelta(hours=1)
     task = service.create_task("Local block", start=start, end=end)
-    service.repo.save_calendar_account(
-        "google", "user@example.com", "primary", status="ok", last_sync_at=start
-    )
+    service.repo.save_calendar_account("google", "user@example.com", "primary", status="ok", last_sync_at=start)
     service.repo.upsert_calendar_events(
         "google",
         "primary",
@@ -341,9 +316,7 @@ def test_calendar_cache_collision_and_stale_state(service):
             }
         ],
     )
-    collisions = service.schedule_collisions(
-        start, end, exclude_task_id=None
-    )
+    collisions = service.schedule_collisions(start, end, exclude_task_id=None)
     kinds = {item.kind for item in collisions}
     assert "external" in kinds
     items = service.calendar_items(start - timedelta(hours=1), end + timedelta(hours=1))
@@ -399,9 +372,7 @@ def test_readonly_sql_guard(service):
         with pytest.raises(ReadOnlyQueryError):
             validate_readonly_sql(sql)
     service.create_task("Query me")
-    columns, rows = service.run_readonly_query(
-        "select name, current_state from public.tasks order by name"
-    )
+    columns, rows = service.run_readonly_query("select name, current_state from public.tasks order by name")
     assert columns == ["name", "current_state"]
     assert rows[0]["name"] == "Query me"
 
@@ -454,5 +425,155 @@ def test_partial_schema_aborts_without_modification(test_database):
         conn.close()
     finally:
         with admin.cursor() as cur:
+            cur.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        admin.close()
+
+
+def test_task_availability_defaults_persistence_and_edit(service):
+    task = service.create_task("Call a business")
+    view = service.load_view()
+    stored = view.snapshot.tasks[task]
+    assert stored.availability == []
+    assert stored.has_custom_availability is False
+
+    service.save_task_availability(
+        task,
+        [
+            AvailabilityWindow(0, 9 * 60, 17 * 60),
+            AvailabilityWindow(1, 9 * 60, 17 * 60),
+            AvailabilityWindow(2, 9 * 60, 12 * 60),
+            AvailabilityWindow(2, 13 * 60, 17 * 60),
+        ],
+    )
+    stored = service.load_view().snapshot.tasks[task]
+    assert stored.has_custom_availability is True
+    assert len(stored.availability) == 4
+    rows = service.db.fetch_all(
+        "SELECT weekday, start_minute, end_minute "
+        "FROM public.task_availability_windows WHERE task_id = %s::uuid "
+        "ORDER BY weekday, start_minute",
+        (task,),
+    )
+    assert rows[0]["weekday"] == 0 and rows[0]["start_minute"] == 540
+    assert any(
+        event["event_type"] == "task.availability_changed"
+        for event in service.repo.list_events(limit=1000)
+    )
+
+    # Editing replaces the previous set atomically.
+    service.save_task_availability(task, [AvailabilityWindow(5, 8 * 60, 12 * 60)])
+    stored = service.load_view().snapshot.tasks[task]
+    assert len(stored.availability) == 1
+    assert stored.availability[0].weekday == 5
+    assert stored.availability[0].start_minute == 480
+
+    # Clearing restores the 24/7 default.
+    service.save_task_availability(task, [])
+    stored = service.load_view().snapshot.tasks[task]
+    assert stored.availability == []
+    assert (
+        service.db.fetch_one(
+            "SELECT count(*) AS n FROM public.task_availability_windows "
+            "WHERE task_id = %s::uuid",
+            (task,),
+        )["n"]
+        == 0
+    )
+
+
+def test_availability_cross_midnight_is_persisted_as_two_windows(service):
+    task = service.create_task("Late shift")
+    service.save_task_availability(task, [AvailabilityWindow(4, 22 * 60, 2 * 60)])
+    stored = service.load_view().snapshot.tasks[task]
+    assert AvailabilityWindow(4, 22 * 60, 24 * 60) in stored.availability
+    assert AvailabilityWindow(5, 0, 2 * 60) in stored.availability
+
+
+def test_availability_does_not_change_status_completion_or_resolution(service):
+    gate = service.create_condition("Gate", evaluation_state=False)
+    task = service.create_task("Blocked but available")
+    service.connect(NodeRef(NodeKind.CONDITION, gate), NodeRef(NodeKind.TASK, task))
+    # Open availability does not make a dependency-blocked Task Ready.
+    service.save_task_availability(task, [AvailabilityWindow(0, 0, 24 * 60)])
+    assert service.load_view().snapshot.tasks[task].current_state is TaskState.BLOCKED
+
+    service.set_condition_value(gate, True)
+    # Closed availability does not make a dependency-ready Task Blocked.
+    service.save_task_availability(task, [AvailabilityWindow(6, 0, 60)])
+    view = service.load_view()
+    assert view.snapshot.tasks[task].current_state is TaskState.READY
+    assert view.evaluation.task_status(task).ready is True
+
+    # Availability also never prevents completion.
+    service.complete_task(task)
+    assert service.load_view().snapshot.tasks[task].current_state is TaskState.COMPLETED
+
+    # ...or Project resolution through a prerequisite Task.
+    project = service.create_project("Resolve despite closed hours")
+    source = service.create_task("Source task with closed hours")
+    service.save_task_availability(source, [AvailabilityWindow(6, 0, 60)])
+    service.connect(NodeRef(NodeKind.TASK, source), NodeRef(NodeKind.PROJECT, project))
+    service.complete_task(source)
+    assert (
+        service.load_view().snapshot.projects[project].current_state
+        is ProjectState.RESOLVED
+    )
+
+
+def test_schema_migrates_from_2_0_0_without_data_loss(test_database):
+    base = AppConfig.load()
+    name = "efos_migrate_" + uuid.uuid4().hex[:8]
+    password = base.db_password
+    admin = psycopg2.connect(
+        host=base.db_host,
+        port=base.db_port,
+        user=base.admin_user,
+        password=password,
+        dbname="postgres",
+    )
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'CREATE DATABASE "{name}"')
+    try:
+        config = replace(base, db_name=name)
+        first = EFOSService(config)
+        first.start()
+        task = first.create_task("Survives the migration")
+        first.close()
+
+        conn = psycopg2.connect(
+            host=base.db_host,
+            port=base.db_port,
+            user=base.db_user,
+            password=password,
+            dbname=name,
+        )
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE public.task_availability_windows")
+            cur.execute(
+                "UPDATE public.schema_meta SET value = '2.0.0' "
+                "WHERE key = 'schema_version'"
+            )
+        conn.close()
+
+        second = EFOSService(config)
+        second.start()
+        assert second.repo.get_task(task).name == "Survives the migration"
+        assert second.db.fetch_one(
+            "SELECT value FROM public.schema_meta WHERE key = 'schema_version'"
+        )["value"] == "2.1.0"
+        assert second.db.fetch_one(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = 'task_availability_windows'"
+        )
+        second.close()
+    finally:
+        with admin.cursor() as cur:
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (name,),
+            )
             cur.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         admin.close()

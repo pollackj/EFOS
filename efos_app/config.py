@@ -21,8 +21,8 @@ from .credentials import CredentialVault
 
 APP_NAME = "EFOS"
 APP_DISPLAY_NAME = "Executive Function Optimization System"
-APP_VERSION = "2.0.0"
-SCHEMA_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
+SCHEMA_VERSION = "2.1.0"
 ORG_NAME = "EFOS"
 
 RUNTIME_PROFILE_FILE = "runtime.json"

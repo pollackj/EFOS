@@ -21,10 +21,23 @@ if (-not $SkipTests) {
 }
 
 $release = Join-Path $root "release"
+$staging = Join-Path $root "build\release-staging"
 $work = Join-Path $root "build\pyinstaller"
 $specDir = Join-Path $root "build"
 New-Item -ItemType Directory -Force $release | Out-Null
-Get-ChildItem $release -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $staging | Out-Null
+Get-ChildItem $staging -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+$icon = Join-Path $root "assets\efos.ico"
+if (-not (Test-Path $icon)) {
+    $icon = Join-Path $root "build\efos.ico"
+    if (-not (Test-Path $icon)) {
+        Write-Host "Generating the EFOS icon from brand artwork..."
+        python (Join-Path $root "scripts\make_icon.py") $icon
+        if ($LASTEXITCODE -ne 0) { throw "Icon generation failed." }
+    }
+    if (-not (Test-Path $icon)) { throw "Expected icon was not produced: $icon" }
+}
 
 $arguments = @(
     "-m", "PyInstaller",
@@ -33,10 +46,10 @@ $arguments = @(
     "--onefile",
     "--windowed",
     "--name", "EFOS",
-    "--icon", (Join-Path $root "assets\efos.ico"),
+    "--icon", $icon,
     "--version-file", (Join-Path $root "assets\version_info.txt"),
     "--add-data", "$root\efos_app\sql;efos_app\sql",
-    "--distpath", $release,
+    "--distpath", $staging,
     "--workpath", $work,
     "--specpath", $specDir,
     "--paths", $root,
@@ -46,14 +59,52 @@ Write-Host "Packaging one-file Windows executable..."
 python @arguments
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 
-$exe = Join-Path $release "EFOS.exe"
+$exe = Join-Path $staging "EFOS.exe"
 if (-not (Test-Path $exe)) { throw "Expected executable was not produced: $exe" }
+
+# Verify the staged binary against the live database before touching release\.
+Write-Host "Verifying staged binary self-test..."
+$selftest = Join-Path $tmp "selftest_binary.json"
+if (Test-Path $selftest) { Remove-Item $selftest -Force }
+$env:EFOS_SELFTEST_OUT = $selftest
+$process = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+$selftestExit = $process.ExitCode
+if ($selftestExit -ne 0) {
+    throw "Staged binary self-test failed with exit code $selftestExit. Existing release\EFOS.exe was not modified."
+}
+if (-not (Test-Path $selftest)) {
+    throw "Staged binary did not write its self-test report. Existing release\EFOS.exe was not modified."
+}
+$report = Get-Content $selftest -Raw | ConvertFrom-Json
+if (-not $report.ok) {
+    throw "Staged binary self-test reported failure: $($report.error). Existing release\EFOS.exe was not modified."
+}
+Write-Host "Staged binary connected to $($report.connection) with $($report.counts.tasks) tasks."
+
+# Preserve the previous verified binary outside release\, then publish the new one.
+$targetExe = Join-Path $release "EFOS.exe"
+if (Test-Path $targetExe) {
+    Copy-Item $targetExe (Join-Path $tmp "EFOS.previous.exe") -Force
+}
+Copy-Item $exe $targetExe -Force
+$exe = $targetExe
 
 $readme = @"
 EFOS - Executive Function Optimization System
 =============================================
+Version 2.1.0
 
 Run: double-click EFOS.exe
+
+Status and availability
+-----------------------
+Task Status is Ready, Blocked, Completed, or Deferred. It is derived from
+conjunctive preconditions and prerequisites.
+
+Temporal availability is separate: every new task defaults to 24/7, and an
+optional availability dialog can restrict a task to selected weekdays and time
+windows (including multiple windows per day). Availability never changes task
+status, completion, project resolution, scheduling, or recurrence.
 
 Configuration
 -------------
@@ -69,10 +120,13 @@ project's release\ folder. Keep the .env file out of shared distributions.
 
 Database
 --------
-The canonical EFOS schema is created automatically the first time the selected
-database is empty. A partially-created EFOS schema is refused rather than
-modified. First launch may require one-time administrative credentials; daily
-runtime can use a separate low-privilege application role.
+The canonical EFOS 2.1.0 schema is created automatically the first time the
+selected database is empty. An existing EFOS 2.0.0 database is upgraded
+additively on startup: public.task_availability_windows is created and
+schema_meta is bumped to 2.1.0 without dropping or recreating existing tables.
+A partially-created or mismatched EFOS schema is refused rather than modified.
+First launch may require one-time administrative credentials; daily runtime can
+use a separate low-privilege application role.
 
 Google Calendar
 ---------------

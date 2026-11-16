@@ -1,8 +1,6 @@
 """RAG Assistant: permanent two-column conversation and query launchpad."""
 from __future__ import annotations
-
 from datetime import datetime
-
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
@@ -31,7 +29,7 @@ from .widgets import Badge, Divider, IconButton, SectionLabel
 from ..workers import ChatWorker
 
 DEFAULT_PRESETS = [
-    ("Which Tasks are available now?", "Which Tasks are available now?"),
+    ("Which Tasks are ready now?", "Which Tasks are ready now?"),
     ("List active Projects", "List active Projects"),
     ("What conditions are unknown?", "What conditions are unknown?"),
     (PRIORITY_PROMPT, PRIORITY_PROMPT),
@@ -75,6 +73,7 @@ class ChatPage(QWidget):
         self._worker_thread_id: str | None = None
         self._pending: QWidget | None = None
         self.cached_queries: list = []
+        self._user_bubbles: list[tuple[QFrame, QLabel, str]] = []
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -100,7 +99,6 @@ class ChatPage(QWidget):
         self.disclaimer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left_layout.addWidget(self.disclaimer)
         root.addWidget(left, 1)
-
         root.addWidget(self._launchpad())
 
     # ------------------------------------------------------------------ thread
@@ -227,7 +225,6 @@ class ChatPage(QWidget):
         pipeline_layout.addWidget(self.pipeline_label)
         layout.addWidget(pipeline)
         layout.addStretch(1)
-
         self.launch_scroll.setWidget(host)
         return panel
 
@@ -325,9 +322,7 @@ class ChatPage(QWidget):
     def _delete_thread(self) -> None:
         if not self.thread_id:
             return
-        if not confirm_dialog(
-            self, "Delete conversation?", "The stored message history will be removed."
-        ):
+        if not confirm_dialog(self, "Delete conversation?", "The stored message history will be removed."):
             return
         try:
             self.service.delete_thread(self.thread_id)
@@ -494,7 +489,30 @@ class ChatPage(QWidget):
         self.stream.addWidget(hint)
         self.stream.addStretch(1)
 
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._sync_user_bubble_widths()
+
+    def _sync_user_bubble_widths(self) -> None:
+        stream_w = self.stream_scroll.viewport().width()
+        if stream_w <= 100:
+            return
+        max_user_w = int(min(stream_w, 960) * 0.72)
+        for frame, text, raw in getattr(self, "_user_bubbles", []):
+            try:
+                unwrapped_w = text.fontMetrics().horizontalAdvance(raw) + 32
+                frame.setMaximumWidth(max_user_w)
+                if unwrapped_w > max_user_w or "\n" in raw:
+                    text.setWordWrap(True)
+                    text.setMinimumWidth(max_user_w - 32)
+                else:
+                    text.setWordWrap(False)
+                    text.setMinimumWidth(0)
+            except RuntimeError:
+                continue
+
     def _render_messages(self) -> None:
+        self._user_bubbles = []
         _clear_layout(self.stream)
         if not self.messages:
             self._render_empty_stream()
@@ -502,18 +520,33 @@ class ChatPage(QWidget):
         for message in self.messages:
             self.stream.addWidget(self._bubble(message))
         self.stream.addStretch(1)
+        self._sync_user_bubble_widths()
         from PyQt6.QtCore import QTimer
 
-        QTimer.singleShot(0, lambda: self.stream_scroll.verticalScrollBar().setValue(self.stream_scroll.verticalScrollBar().maximum()))
+        QTimer.singleShot(
+            0,
+            lambda: (
+                self._sync_user_bubble_widths(),
+                self.stream_scroll.verticalScrollBar().setValue(
+                    self.stream_scroll.verticalScrollBar().maximum()
+                ),
+            ),
+        )
 
     def _bubble(self, message: ChatMessage) -> QWidget:
-        frame = QFrame()
         assistant = message.role != "user"
-        frame.setObjectName("ChatBubbleAssistant" if assistant else "ChatBubbleUser")
-        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        frame = QFrame()
+        if assistant:
+            frame.setStyleSheet("QFrame { background: transparent; border: none; }")
+            frame.setMaximumWidth(960)
+        else:
+            frame.setObjectName("ChatBubbleUser")
+            frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(13, 10, 13, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(4 if assistant else 14, 6 if assistant else 10, 4 if assistant else 14, 10)
+        layout.setSpacing(6)
+
         meta = message.metadata or {}
         header = QHBoxLayout()
         header.setSpacing(6)
@@ -522,29 +555,45 @@ class ChatPage(QWidget):
         header.addWidget(speaker)
         route = meta.get("route")
         if assistant and route:
-            tone = {"QUERY": "accent", "CHAT": "unknown", "PRIORITIES": "available", "ERROR": "false"}.get(str(route), "unknown")
+            tone = {
+                "QUERY": "accent",
+                "CHAT": "unknown",
+                "PRIORITIES": "ready",
+                "ERROR": "false",
+            }.get(str(route), "unknown")
             header.addWidget(Badge(str(route), tone))
         if assistant and meta.get("query_label"):
             header.addWidget(Badge(str(meta["query_label"])[:28], "unknown"))
         header.addStretch(1)
         layout.addLayout(header)
+
         text = QLabel(message.content)
-        text.setWordWrap(True)
         text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        text.setStyleSheet(f"color: {c('text_soft') if assistant else c('text')}; font-size: 12px;")
-        text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        text.setStyleSheet(
+            f"color: {c('text_soft') if assistant else c('text')}; "
+            "font-size: 12.5px; line-height: 1.45;"
+        )
+
+        if assistant:
+            text.setWordWrap(True)
+            text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        else:
+            self._user_bubbles.append((frame, text, message.content))
+
         layout.addWidget(text)
+
         if assistant and meta.get("route") == "QUERY" and meta.get("sql"):
             disclosure = QLabel(f"SQL · {meta.get('title') or 'query'}")
             disclosure.setStyleSheet(f"color: {c('accent')}; font-size: 9px;")
             disclosure.setToolTip(str(meta.get("sql"))[:1200])
             layout.addWidget(disclosure)
+
         holder = QWidget()
         holder_layout = QHBoxLayout(holder)
         holder_layout.setContentsMargins(0, 0, 0, 0)
         if assistant:
-            holder_layout.addWidget(frame, 0)
-            holder_layout.addStretch(1)
+            holder_layout.addWidget(frame, 1)
+            holder_layout.addStretch(0)
         else:
             holder_layout.addStretch(1)
             holder_layout.addWidget(frame, 0)
@@ -652,9 +701,7 @@ class ChatPage(QWidget):
         self._refresh_custom_queries()
 
     def _delete_custom(self, query) -> None:  # type: ignore[no-untyped-def]
-        if not confirm_dialog(
-            self, "Delete custom query?", f"“{query.label}” will be removed."
-        ):
+        if not confirm_dialog(self, "Delete custom query?", f"“{query.label}” will be removed."):
             return
         try:
             self.service.delete_custom_query(query.id)
@@ -695,6 +742,6 @@ class ChatPage(QWidget):
             f"conditions {metrics['conditions']}\n"
             f"preconditions {metrics['preconditions']} · "
             f"prerequisites {metrics['prerequisites']} · links {metrics['links']}\n"
-            f"available tasks {metrics['available_tasks']}\n"
+            f"ready tasks {metrics['ready_tasks']}\n"
             f"context envelope {metrics['context_chars']:,} chars"
         )

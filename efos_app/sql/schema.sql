@@ -9,7 +9,9 @@
 -- Model summary:
 --   * Preconditions are external three-valued facts (public.conditions).
 --   * Prerequisites are internal entity states (task completed / project resolved).
---   * Availability and resolution are conjunctive (AND), derived by services.
+--   * Status and resolution are conjunctive (AND), derived by services.
+--   * Temporal availability is a separate optional local-time model; it never
+--     changes Task state, resolution, scheduling, or recurrence.
 --   * public.events is an append-only audit ledger (no foreign keys).
 --
 SET statement_timeout = 0;
@@ -39,8 +41,8 @@ CREATE TYPE public.recurrence_frequency AS ENUM (
 );
 
 CREATE TYPE public.task_state AS ENUM (
-    'available',
-    'unavailable',
+    'ready',
+    'blocked',
     'completed',
     'deferred'
 );
@@ -111,24 +113,13 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION public.validate_task_availability() RETURNS trigger
+CREATE FUNCTION public.validate_task_status() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    -- 1. Temporal Window Guard: Gracefully downgrade if outside scheduled window
-    IF NEW.current_state = 'available' THEN
-        IF (NEW.scheduled_start IS NOT NULL AND CURRENT_TIMESTAMP < NEW.scheduled_start) OR
-           (NEW.scheduled_end IS NOT NULL AND CURRENT_TIMESTAMP > NEW.scheduled_end) THEN
-            IF OLD.current_state IS DISTINCT FROM 'unavailable' THEN
-                NEW.previous_state := OLD.current_state;
-            END IF;
-            NEW.current_state := 'unavailable';
-            RETURN NEW;
-        END IF;
-    END IF;
 
-    -- 2. Structural Dependency Guard (Preconditions & Prerequisites)
-    IF NEW.current_state = 'available' AND OLD.current_state IS DISTINCT FROM 'available' THEN
+    -- Structural Dependency Guard (Preconditions & Prerequisites)
+    IF NEW.current_state = 'ready' AND OLD.current_state IS DISTINCT FROM 'ready' THEN
         IF EXISTS (
             SELECT 1 FROM public.task_preconditions tp
             JOIN public.conditions c ON c.id = tp.condition_id
@@ -201,7 +192,7 @@ CREATE TABLE public.schema_meta (
     value text NOT NULL
 );
 
-INSERT INTO public.schema_meta (key, value) VALUES ('schema_version', '2.0.0');
+INSERT INTO public.schema_meta (key, value) VALUES ('schema_version', '2.1.0');
 
 CREATE TABLE public.conditions (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
@@ -220,12 +211,12 @@ CREATE TABLE public.tasks (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     name character varying(255) CONSTRAINT tasks_title_not_null NOT NULL,
     is_recurring boolean DEFAULT false NOT NULL,
-    current_state public.task_state DEFAULT 'available'::public.task_state NOT NULL,
+    current_state public.task_state DEFAULT 'ready'::public.task_state NOT NULL,
     previous_state public.task_state,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     scheduled_start timestamp without time zone,
     scheduled_end timestamp without time zone,
-    CONSTRAINT valid_task_transition CHECK ((((previous_state IS NULL) AND (current_state = ANY (ARRAY['available'::public.task_state, 'unavailable'::public.task_state]))) OR ((previous_state = 'available'::public.task_state) AND (current_state = 'unavailable'::public.task_state)) OR ((previous_state = 'available'::public.task_state) AND (current_state = 'completed'::public.task_state)) OR ((previous_state = 'available'::public.task_state) AND (current_state = 'deferred'::public.task_state)) OR ((previous_state = 'unavailable'::public.task_state) AND (current_state = 'available'::public.task_state)) OR ((previous_state = 'unavailable'::public.task_state) AND (current_state = 'deferred'::public.task_state)) OR ((previous_state = 'completed'::public.task_state) AND (current_state = 'available'::public.task_state)) OR ((previous_state = 'completed'::public.task_state) AND (current_state = 'unavailable'::public.task_state)) OR ((previous_state = 'deferred'::public.task_state) AND (current_state = 'available'::public.task_state)) OR ((previous_state = 'deferred'::public.task_state) AND (current_state = 'unavailable'::public.task_state)))),
+    CONSTRAINT valid_task_transition CHECK ((((previous_state IS NULL) AND (current_state = ANY (ARRAY['ready'::public.task_state, 'blocked'::public.task_state]))) OR ((previous_state = 'ready'::public.task_state) AND (current_state = 'blocked'::public.task_state)) OR ((previous_state = 'ready'::public.task_state) AND (current_state = 'completed'::public.task_state)) OR ((previous_state = 'ready'::public.task_state) AND (current_state = 'deferred'::public.task_state)) OR ((previous_state = 'blocked'::public.task_state) AND (current_state = 'ready'::public.task_state)) OR ((previous_state = 'blocked'::public.task_state) AND (current_state = 'deferred'::public.task_state)) OR ((previous_state = 'completed'::public.task_state) AND (current_state = 'ready'::public.task_state)) OR ((previous_state = 'completed'::public.task_state) AND (current_state = 'blocked'::public.task_state)) OR ((previous_state = 'deferred'::public.task_state) AND (current_state = 'ready'::public.task_state)) OR ((previous_state = 'deferred'::public.task_state) AND (current_state = 'blocked'::public.task_state)))),
     CONSTRAINT valid_task_schedule CHECK (((scheduled_start IS NULL AND scheduled_end IS NULL) OR (scheduled_start IS NOT NULL AND scheduled_end IS NOT NULL AND scheduled_end > scheduled_start)))
 );
 
@@ -299,10 +290,10 @@ CREATE TABLE public.task_recurrence_rules (
     until_date timestamp without time zone,
     reset_hour smallint DEFAULT 18 NOT NULL,
     reset_minute smallint DEFAULT 0 NOT NULL,
-    end_hour smallint DEFAULT 19 NOT NULL,
-    end_minute smallint DEFAULT 0 NOT NULL,
     last_reset_window timestamp without time zone,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    end_hour smallint DEFAULT 19 NOT NULL,
+    end_minute smallint DEFAULT 0 NOT NULL,
     CONSTRAINT exclusive_end_boundary CHECK (((occurrence_count IS NULL) OR (until_date IS NULL))),
     CONSTRAINT valid_end_hour CHECK (((end_hour >= 0) AND (end_hour <= 23))),
     CONSTRAINT valid_end_minute CHECK (((end_minute >= 0) AND (end_minute <= 59))),
@@ -311,6 +302,28 @@ CREATE TABLE public.task_recurrence_rules (
     CONSTRAINT valid_occurrence_count CHECK (((occurrence_count IS NULL) OR (occurrence_count > 0))),
     CONSTRAINT valid_reset_hour CHECK (((reset_hour >= 0) AND (reset_hour <= 23))),
     CONSTRAINT valid_reset_minute CHECK (((reset_minute >= 0) AND (reset_minute <= 59)))
+);
+
+--
+-- Optional temporal Task availability (independent of state, schedule, recurrence)
+--
+-- No rows for a task means the 24/7 default. A row is one local-time window:
+-- weekday 0 = Monday … 6 = Sunday; minutes are measured from local midnight and
+-- the end is exclusive. Windows never cross midnight in storage; a real-world
+-- window such as Mon 22:00-02:00 is normalized into two rows on save.
+--
+CREATE TABLE public.task_availability_windows (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    task_id uuid NOT NULL,
+    weekday smallint NOT NULL,
+    start_minute smallint NOT NULL,
+    end_minute smallint NOT NULL,
+    CONSTRAINT task_availability_windows_pkey PRIMARY KEY (id),
+    CONSTRAINT task_availability_windows_unique UNIQUE (task_id, weekday, start_minute, end_minute),
+    CONSTRAINT task_availability_valid_weekday CHECK (((weekday >= 0) AND (weekday <= 6))),
+    CONSTRAINT task_availability_valid_start CHECK (((start_minute >= 0) AND (start_minute <= 1439))),
+    CONSTRAINT task_availability_valid_end CHECK (((end_minute > 0) AND (end_minute <= 1440))),
+    CONSTRAINT task_availability_valid_window CHECK ((end_minute > start_minute))
 );
 
 --
@@ -413,6 +426,7 @@ ALTER TABLE ONLY public.calendar_events ADD CONSTRAINT calendar_events_pkey PRIM
 
 CREATE INDEX idx_tasks_schedule ON public.tasks USING btree (scheduled_start, scheduled_end) WHERE ((scheduled_start IS NOT NULL) AND (scheduled_end IS NOT NULL));
 CREATE INDEX idx_tasks_state ON public.tasks USING btree (current_state);
+CREATE INDEX idx_task_availability_task ON public.task_availability_windows USING btree (task_id, weekday, start_minute);
 CREATE INDEX idx_projects_state ON public.projects USING btree (current_state);
 CREATE INDEX idx_events_occurred ON public.events USING btree (occurred_at DESC);
 CREATE INDEX idx_events_entity ON public.events USING btree (entity_type, entity_id);
@@ -451,6 +465,7 @@ ALTER TABLE ONLY public.condition_notes ADD CONSTRAINT condition_notes_condition
 ALTER TABLE ONLY public.condition_notes ADD CONSTRAINT condition_notes_note_id_fkey FOREIGN KEY (note_id) REFERENCES public.notes(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.task_recurrence_rules ADD CONSTRAINT fk_recurrence_rule_task FOREIGN KEY (task_id) REFERENCES public.tasks(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.task_availability_windows ADD CONSTRAINT task_availability_windows_task_fk FOREIGN KEY (task_id) REFERENCES public.tasks(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.assistant_messages ADD CONSTRAINT assistant_messages_thread_fk FOREIGN KEY (thread_id) REFERENCES public.assistant_threads(id) ON DELETE CASCADE;
 
 --
@@ -463,7 +478,7 @@ CREATE TRIGGER touch_custom_query_timestamp BEFORE UPDATE ON public.custom_queri
 CREATE TRIGGER touch_assistant_thread_timestamp BEFORE UPDATE ON public.assistant_threads FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
 CREATE TRIGGER events_immutable_update_delete BEFORE UPDATE OR DELETE ON public.events FOR EACH ROW EXECUTE FUNCTION public.reject_event_mutation();
 
-CREATE TRIGGER validate_task_available_before_update BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.validate_task_availability();
+CREATE TRIGGER validate_task_status_before_update BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.validate_task_status();
 CREATE TRIGGER validate_project_resolved_before_update BEFORE UPDATE ON public.projects FOR EACH ROW EXECUTE FUNCTION public.validate_project_resolution();
 
 CREATE TRIGGER project_preconditions_sync_flag AFTER INSERT OR DELETE ON public.project_preconditions FOR EACH ROW EXECUTE FUNCTION public.sync_project_requirements_flag();
@@ -477,6 +492,10 @@ COMMENT ON TABLE public.task_preconditions IS 'Precondition object for a depende
 COMMENT ON TABLE public.task_prerequisites IS 'Prerequisite whose dependent object is a Task (2VL internal entity state mapping).';
 COMMENT ON TABLE public.project_prerequisites IS 'Prerequisite whose dependent object is a Project (2VL internal entity state mapping).';
 COMMENT ON TABLE public.task_recurrence_rules IS 'Stores Google Calendar-style recurrence pattern rule structures mapping 1-to-1 with recurring tasks.';
+COMMENT ON TABLE public.task_availability_windows IS 'Optional local-time windows when a Task can be performed. No rows = 24/7 default. Independent of Status, scheduled_start/scheduled_end, and recurrence.';
+COMMENT ON COLUMN public.task_availability_windows.weekday IS '0 = Monday … 6 = Sunday, matching datetime.weekday().';
+COMMENT ON COLUMN public.task_availability_windows.start_minute IS 'Minutes after local midnight; inclusive.';
+COMMENT ON COLUMN public.task_availability_windows.end_minute IS 'Minutes after local midnight; exclusive, up to 1440 (midnight).';
 COMMENT ON TABLE public.events IS 'Append-only chronological system audit ledger. No foreign keys; UPDATE and DELETE are rejected by trigger.';
 COMMENT ON TABLE public.notes IS 'Central one-to-one note content mapped to entities through junction tables.';
 COMMENT ON COLUMN public.projects.resolution_conditions_unknown IS 'TRUE blocks automated resolution until valid dependencies are attached.';

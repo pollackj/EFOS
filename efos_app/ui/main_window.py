@@ -211,11 +211,17 @@ class MainWindow(QMainWindow):
         self._probe_timer = QTimer(self)
         self._probe_timer.timeout.connect(self._probe_connection)
         self._probe_timer.start(15_000)
-        QTimer.singleShot(1200, self._probe_connection)
+        self._initial_probe_timer = QTimer(self)
+        self._initial_probe_timer.setSingleShot(True)
+        self._initial_probe_timer.timeout.connect(self._probe_connection)
+        self._initial_probe_timer.start(1200)
         self._sync_timer = QTimer(self)
         self._sync_timer.timeout.connect(self._periodic_sync)
         self._sync_timer.start(15 * 60_000)
-        QTimer.singleShot(4000, self._periodic_sync)
+        self._initial_sync_timer = QTimer(self)
+        self._initial_sync_timer.setSingleShot(True)
+        self._initial_sync_timer.timeout.connect(self._periodic_sync)
+        self._initial_sync_timer.start(4000)
         # Target the main window container wrapper and its immediate borders to prevent layout masking
         self.setStyleSheet("""
             QMainWindow {
@@ -679,7 +685,7 @@ class MainWindow(QMainWindow):
         if not visible:
             self.show_toast(
                 "Completed and deferred tasks are hidden from the canvas; they remain "
-                "available in the Registry.",
+                "visible in the Registry.",
                 "info",
             )
 
@@ -901,7 +907,12 @@ class MainWindow(QMainWindow):
                 page.shutdown()
             except Exception:
                 pass
-        for timer_name in ("_probe_timer", "_sync_timer"):
+        for timer_name in (
+            "_initial_probe_timer",
+            "_initial_sync_timer",
+            "_probe_timer",
+            "_sync_timer",
+        ):
             timer = getattr(self, timer_name, None)
             if timer is not None:
                 timer.stop()

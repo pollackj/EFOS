@@ -59,20 +59,29 @@ def kind_label(kind: NodeKind) -> str:
     return kind.label
 
 def schedule_span(task) -> str:  # type: ignore[no-untyped-def]
-    suffix = f" · {task.recurrence.summary()}" if getattr(task, "recurrence", None) else ""
+    """The Task's scheduled block only; recurrence is presented separately."""
     if not task.scheduled_start or not task.scheduled_end:
-        if getattr(task, "recurrence", None):
-            rule = task.recurrence
-            return (
-                f"{rule.reset_hour:02d}:{rule.reset_minute:02d} – "
-                f"{rule.end_hour:02d}:{rule.end_minute:02d}{suffix}"
-            )
         return "Unscheduled"
     if task.scheduled_start.date() == task.scheduled_end.date():
         span = f"{fmt_datetime(task.scheduled_start)} – {fmt_time(task.scheduled_end)}"
     else:
         span = f"{fmt_datetime(task.scheduled_start)} – {fmt_datetime(task.scheduled_end)}"
-    return f"{span}{suffix}"
+    return span
+
+def recurrence_span(task) -> str:  # type: ignore[no-untyped-def]
+    rule = getattr(task, "recurrence", None)
+    if not rule:
+        return "Not recurring"
+    window = (
+        f" · {rule.reset_hour:02d}:{rule.reset_minute:02d}–"
+        f"{rule.end_hour:02d}:{rule.end_minute:02d}"
+    )
+    return f"{rule.summary()}{window}"
+
+def availability_span(task) -> str:  # type: ignore[no-untyped-def]
+    from .logic import availability_summary
+
+    return availability_summary(getattr(task, "availability", []))
 
 # ----------------------------------------------------------------- calendar
 def day_bounds(value: datetime) -> tuple[datetime, datetime]:

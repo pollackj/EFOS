@@ -68,7 +68,6 @@ KIND_ICON = {
     NodeKind.CONDITION: "condition",
 }
 
-
 class LayoutStore:
     """Node coordinates are UI state, so the canonical schema stays untouched."""
 
@@ -114,7 +113,6 @@ class LayoutStore:
             temporary.replace(self.path)
         except OSError:
             return
-
 
 class PortItem(QGraphicsItem):
     def __init__(self, parent: "FlowNodeItem", role: str):
@@ -244,6 +242,8 @@ class FlowNodeItem(QGraphicsObject):
     def _subtitle(self) -> str:
         if self.ref.kind is NodeKind.TASK and self.task:
             text = self._dependency_text()
+            if self.task.has_custom_availability:
+                text += " · custom availability"
             if self.task.scheduled_start:
                 text += f" · {fmt_datetime(self.task.scheduled_start)}"
             return text
@@ -638,9 +638,9 @@ class FlowScene(QGraphicsScene):
                     self.edge_items.append(edge_item)
             bounds = self.itemsBoundingRect()
             if bounds.isEmpty():
-                self.setSceneRect(0, 0, 1080, 680)
+                self.setSceneRect(-10000, -10000, 20000, 20000)
             else:
-                self.setSceneRect(bounds.adjusted(-180, -140, 200, 160))
+                self.setSceneRect(bounds.adjusted(-5000, -5000, 5000, 5000))
             if refs and positions:
                 self.layout_store.set_positions(positions)
             if selected_key and selected_key in self.node_items:
@@ -664,17 +664,65 @@ class FlowScene(QGraphicsScene):
     def _compute_auto_layout(
         self, view: WorkspaceView, refs: list[NodeRef]
     ) -> dict[str, tuple[float, float]]:
-        layers: dict[int, list[NodeRef]] = {}
-        for ref in refs:
-            layers.setdefault(self._depth(view, ref), []).append(ref)
         positions: dict[str, tuple[float, float]] = {}
-        top = 40.0
+        snapshot = view.snapshot
+        
+        # Gather all edges for quick lookup of connection status
+        all_edges = list(snapshot.edges())
+        connected_refs = set()
+        for edge in all_edges:
+            connected_refs.add(edge.source)
+            connected_refs.add(edge.target)
+
+        # 1. Separate connected chain items from standalone items
+        chain_refs = [ref for ref in refs if ref in connected_refs]
+        standalone_tasks = [ref for ref in refs if ref.kind == NodeKind.TASK and ref not in connected_refs]
+        standalone_projects = [ref for ref in refs if ref.kind == NodeKind.PROJECT and ref not in connected_refs]
+        conditions = [ref for ref in refs if ref.kind == NodeKind.CONDITION] # conditions can also be handled
+
+        # 2. Layout Connected Chains on the Left
+        chain_layers: dict[int, list[NodeRef]] = {}
+        for ref in chain_refs:
+            chain_layers.setdefault(self._depth(view, ref), []).append(ref)
+
+        left_margin = 40.0
+        top_margin = 40.0
         step_x = NODE_WIDTH + COLUMN_GAP
         step_y = NODE_HEIGHT + NODE_GAP_Y
-        for layer in sorted(layers):
-            items = sorted(layers[layer], key=lambda item: (item.kind.value, view.snapshot.get_name(item).casefold()))
+
+        max_chain_x = left_margin
+        for layer in sorted(chain_layers):
+            items = sorted(chain_layers[layer], key=lambda item: (item.kind.value, snapshot.get_name(item).casefold()))
+            layer_x = left_margin + (layer - 1) * step_x if chain_layers else left_margin
+            max_chain_x = max(max_chain_x, layer_x)
             for index, ref in enumerate(items):
-                positions[ref.key] = (top + layer * step_x, top + index * step_y)
+                positions[ref.key] = (layer_x, top_margin + index * step_y)
+
+        # Fallback if no chains exist
+        if not chain_refs:
+            max_chain_x = left_margin + step_x
+
+        # 3. Layout Standalone Items on the Right (Two clean columns)
+        standalone_start_x = max_chain_x + step_x + 80.0  # Gap separating chains from standalones
+        
+        # Standalone Tasks Column
+        task_x = standalone_start_x
+        for index, ref in enumerate(sorted(standalone_tasks, key=lambda r: snapshot.get_name(r).casefold())):
+            positions[ref.key] = (task_x, top_margin + index * step_y)
+
+        # Standalone Projects Column (placed to the right of standalone tasks)
+        project_x = standalone_start_x + step_x + 40.0
+        for index, ref in enumerate(sorted(standalone_projects, key=lambda r: snapshot.get_name(r).casefold())):
+            positions[ref.key] = (project_x, top_margin + index * step_y)
+
+        # Handle any leftover conditions
+        cond_x = left_margin
+        cond_y = top_margin + (len(chain_refs) * step_y) + 60.0
+        for ref in conditions:
+            if ref.key not in positions:
+                positions[ref.key] = (cond_x, cond_y)
+                cond_y += NODE_HEIGHT + NODE_GAP_Y
+
         return positions
 
     def _new_node_position(
@@ -701,7 +749,7 @@ class FlowScene(QGraphicsScene):
         self.layout_store.save()
         self.refresh_edges()
         bounds = self.itemsBoundingRect()
-        self.setSceneRect(bounds.adjusted(-180, -140, 200, 160))
+        self.setSceneRect(bounds.adjusted(-5000, -5000, 5000, 5000))
         self.layout_changed.emit()
 
     def _position_committed(self, key: str, x: float, y: float) -> None:
@@ -876,14 +924,14 @@ class FlowView(QGraphicsView):
         event.accept()
 
     def mousePressEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = True
-            self._pan_start = event.position()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
             item = self.itemAt(event.position().toPoint())
+            if item is None:
+                self._panning = True
+                self._pan_start = event.position()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
             if isinstance(item, PortItem) and item.role == "out":
                 self._connecting = True
                 self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -897,6 +945,7 @@ class FlowView(QGraphicsView):
         if self._panning and self._pan_start is not None:
             delta = event.position() - self._pan_start
             self._pan_start = event.position()
+            # Pan smoothly using underlying scrollbar values
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - int(delta.x()))
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(delta.y()))
             event.accept()
@@ -908,7 +957,7 @@ class FlowView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
-        if self._panning and event.button() == Qt.MouseButton.MiddleButton:
+        if self._panning:
             self._panning = False
             self._pan_start = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -916,7 +965,6 @@ class FlowView(QGraphicsView):
             return
         if self._connecting and event.button() == Qt.MouseButton.LeftButton:
             self._connecting = False
-            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
             self.flow_scene.finish_connection(self.mapToScene(event.position().toPoint()))
             event.accept()
             return

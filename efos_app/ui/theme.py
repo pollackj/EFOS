@@ -98,8 +98,8 @@ FONT_FAMILY = "Segoe UI Variable Text"
 FONT_DISPLAY = "Segoe UI Variable Display"
 
 STATE_COLORS = {
-    "available": "green",
-    "unavailable": "faint",
+    "ready": "green",
+    "blocked": "faint",
     "completed": "blue",
     "deferred": "amber",
     "active": "accent",
@@ -372,8 +372,8 @@ QComboBox QAbstractItemView::item {{ min-height: 26px; padding: 3px 8px; }}
 QDateTimeEdit::drop-down, QTimeEdit::drop-down {{ border: none; width: 22px; }}
 QCheckBox {{ color: {t['text_soft']}; spacing: 8px; font-size: 12px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; border: 1px solid {t['border_hi']}; background: {t['input']}; }}
-QCheckBox::indicator:hover {{ border-color: {t['accent']}; }}
-QCheckBox::indicator:checked {{ background: {t['accent']}; border-color: {t['accent']}; }}
+QCheckBox::indicator:hover {{ border-color: {t['green']}; }}
+QCheckBox::indicator:checked {{ background: {t['green']}; border-color: {t['green']}; }}
 
 QLabel {{ background: transparent; }}
 QLabel[role="h1"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: 27px; font-weight: 650; color: {t['text']}; }}
@@ -388,8 +388,8 @@ QLabel[role="danger"] {{ color: {t['red']}; font-size: 12px; }}
 QLabel[role="success"] {{ color: {t['green']}; font-size: 12px; }}
 QLabel[role="sectionTitle"] {{ font-size: 11px; font-weight: 700; color: {t['muted']}; letter-spacing: 1px; }}
 QLabel[badge="true"] {{ border-radius: 9px; padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }}
-QLabel[tone="available"], QLabel[tone="resolved"], QLabel[tone="true"] {{ color: {t['green']}; background: {rgba('green', 0.11)}; border: 1px solid {rgba('green', 0.24)}; }}
-QLabel[tone="unavailable"], QLabel[tone="shelved"], QLabel[tone="unknown"] {{ color: {t['muted']}; background: {rgba('muted', 0.09)}; border: 1px solid {rgba('muted', 0.18)}; }}
+QLabel[tone="ready"], QLabel[tone="resolved"], QLabel[tone="true"] {{ color: {t['green']}; background: {rgba('green', 0.11)}; border: 1px solid {rgba('green', 0.24)}; }}
+QLabel[tone="blocked"], QLabel[tone="shelved"], QLabel[tone="unknown"] {{ color: {t['muted']}; background: {rgba('muted', 0.09)}; border: 1px solid {rgba('muted', 0.18)}; }}
 QLabel[tone="completed"] {{ color: {t['blue']}; background: {rgba('blue', 0.11)}; border: 1px solid {rgba('blue', 0.24)}; }}
 QLabel[tone="deferred"], QLabel[tone="stalled"] {{ color: {t['amber']}; background: {rgba('amber', 0.10)}; border: 1px solid {rgba('amber', 0.24)}; }}
 QLabel[tone="false"], QLabel[tone="error"] {{ color: {t['red']}; background: {rgba('red', 0.10)}; border: 1px solid {rgba('red', 0.24)}; }}

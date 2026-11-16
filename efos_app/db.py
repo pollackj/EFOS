@@ -6,9 +6,11 @@ Startup follows the specification exactly:
 2. open a maintenance connection to the server's ``postgres`` database;
 3. check whether the target database exists;
 4. create it outside a transaction when missing;
-5. reconnect to the target and execute the canonical schema byte-for-byte;
-6. verify every table, index, trigger, enum, and required column;
-7. abort with a detailed discrepancy report if a partial or mismatched schema
+5. apply the additive 2.0.0 → 2.1.0 migration when that predecessor is found;
+6. reconnect to the target and execute the canonical schema byte-for-byte when
+   the database is empty;
+7. verify every table, index, trigger, enum, and required column;
+8. abort with a detailed discrepancy report if a partial or mismatched schema
    is found. Destructive automatic recovery is never attempted.
 """
 from __future__ import annotations
@@ -51,6 +53,7 @@ EFOS_TABLES = frozenset(
         "project_notes",
         "condition_notes",
         "task_recurrence_rules",
+        "task_availability_windows",
         "events",
         "assistant_threads",
         "assistant_messages",
@@ -62,7 +65,7 @@ EFOS_TABLES = frozenset(
 
 EFOS_ENUMS: dict[str, list[str]] = {
     "project_state": ["active", "stalled", "shelved", "resolved"],
-    "task_state": ["available", "unavailable", "completed", "deferred"],
+    "task_state": ["ready", "blocked", "completed", "deferred"],
     "recurrence_frequency": ["daily", "weekly", "monthly", "yearly"],
 }
 
@@ -74,7 +77,7 @@ EFOS_TRIGGERS = frozenset(
         "touch_custom_query_timestamp",
         "touch_assistant_thread_timestamp",
         "events_immutable_update_delete",
-        "validate_task_available_before_update",
+        "validate_task_status_before_update",
         "validate_project_resolved_before_update",
         "project_preconditions_sync_flag",
         "project_prerequisites_sync_flag",
@@ -85,6 +88,7 @@ EFOS_INDEXES = frozenset(
     {
         "idx_tasks_schedule",
         "idx_tasks_state",
+        "idx_task_availability_task",
         "idx_projects_state",
         "idx_events_occurred",
         "idx_events_entity",
@@ -136,6 +140,13 @@ EFOS_REQUIRED_COLUMNS: dict[str, set[str]] = {
         "reset_minute",
         "last_reset_window",
     },
+    "task_availability_windows": {
+        "id",
+        "task_id",
+        "weekday",
+        "start_minute",
+        "end_minute",
+    },
     "notes": {"id", "content", "updated_at"},
     "events": {
         "id",
@@ -180,6 +191,63 @@ EFOS_REQUIRED_COLUMNS: dict[str, set[str]] = {
 }
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# The 2.0.0 table set is the supported migration predecessor. The migration is
+# additive: it creates the availability table, its index, and its foreign key,
+# then bumps schema_meta. Existing rows and relationships are untouched.
+EFOS_TABLES_V2_0 = frozenset(EFOS_TABLES - {"task_availability_windows"})
+SCHEMA_VERSION_V2_0 = "2.0.0"
+
+MIGRATION_2_1_0_SQL = """
+CREATE TABLE public.task_availability_windows (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    task_id uuid NOT NULL,
+    weekday smallint NOT NULL,
+    start_minute smallint NOT NULL,
+    end_minute smallint NOT NULL,
+    CONSTRAINT task_availability_windows_pkey PRIMARY KEY (id),
+    CONSTRAINT task_availability_windows_unique UNIQUE (task_id, weekday, start_minute, end_minute),
+    CONSTRAINT task_availability_valid_weekday CHECK (((weekday >= 0) AND (weekday <= 6))),
+    CONSTRAINT task_availability_valid_start CHECK (((start_minute >= 0) AND (start_minute <= 1439))),
+    CONSTRAINT task_availability_valid_end CHECK (((end_minute > 0) AND (end_minute <= 1440))),
+    CONSTRAINT task_availability_valid_window CHECK ((end_minute > start_minute))
+);
+
+CREATE INDEX idx_task_availability_task ON public.task_availability_windows USING btree (task_id, weekday, start_minute);
+
+ALTER TABLE ONLY public.task_availability_windows
+    ADD CONSTRAINT task_availability_windows_task_fk
+    FOREIGN KEY (task_id) REFERENCES public.tasks(id) ON DELETE CASCADE;
+
+COMMENT ON TABLE public.task_availability_windows IS 'Optional local-time windows when a Task can be performed. No rows = 24/7 default. Independent of Status, scheduled_start/scheduled_end, and recurrence.';
+COMMENT ON COLUMN public.task_availability_windows.weekday IS '0 = Monday … 6 = Sunday, matching datetime.weekday().';
+COMMENT ON COLUMN public.task_availability_windows.start_minute IS 'Minutes after local midnight; inclusive.';
+COMMENT ON COLUMN public.task_availability_windows.end_minute IS 'Minutes after local midnight; exclusive, up to 1440 (midnight).';
+"""
+
+
+def migrate_v2_0_to_v2_1(cur: Any, existing_tables: set[str]) -> bool:
+    """Apply the additive 2.0.0 → 2.1.0 schema migration in the caller's transaction.
+
+    Returns True when the migration was applied. Returns False when the database
+    is not the known 2.0.0 predecessor (the caller then validates or aborts as
+    before). The migration never drops or recreates an existing table.
+    """
+    if "task_availability_windows" in existing_tables:
+        return False
+    if set(existing_tables) != set(EFOS_TABLES_V2_0):
+        return False
+    cur.execute("SELECT value FROM public.schema_meta WHERE key = 'schema_version'")
+    row = cur.fetchone()
+    if not row or row[0] != SCHEMA_VERSION_V2_0:
+        return False
+    cur.execute(MIGRATION_2_1_0_SQL)
+    cur.execute(
+        "UPDATE public.schema_meta SET value = %s WHERE key = 'schema_version'",
+        (SCHEMA_VERSION,),
+    )
+    return True
+
 
 _FORBIDDEN_SQL = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|call|do|"
@@ -244,6 +312,45 @@ def provision_database(admin: DbProfile, target: DbProfile) -> None:
     ensure_database(None, admin_profile=admin, target_profile=target)
 
 
+def _migrate_existing_schema(profile: DbProfile, target: DbProfile) -> bool:
+    """Run the additive 2.0.0 → 2.1.0 migration on an existing database."""
+    conn = psycopg2.connect(profile.dsn(database=target.database))
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext('efos_schema_bootstrap'))")
+            cur.execute(
+                """
+                SELECT table_name
+                  FROM information_schema.tables
+                 WHERE table_schema = 'public'
+                   AND table_name = ANY(%s)
+                """,
+                (sorted(EFOS_TABLES),),
+            )
+            existing = {row[0] for row in cur.fetchall()}
+            migrated = migrate_v2_0_to_v2_1(cur, existing)
+        conn.commit()
+        return migrated
+    except Exception:
+        try:
+            conn.rollback()
+        except psycopg2.Error:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def _verify_target(target: DbProfile) -> None:
+    conn = psycopg2.connect(target.dsn())
+    try:
+        with conn.cursor() as cur:
+            verify_schema(cur)
+    finally:
+        conn.close()
+
+
 def ensure_database(
     config: AppConfig | None = None,
     *,
@@ -288,6 +395,53 @@ def ensure_database(
                 with probe.cursor() as cur:
                     verify_schema(cur)
                 probe.close()
+                return
+            if existing == EFOS_TABLES_V2_0:
+                # An additive upgrade is safe and preserves every row. Try the
+                # runtime role first; fall back to the administrative role when
+                # the runtime role is intentionally low-privilege.
+                probe.close()
+                profiles = [target]
+                if (admin.user, admin.host, admin.port) != (
+                    target.user,
+                    target.host,
+                    target.port,
+                ):
+                    profiles.append(admin)
+                last_error: str = ""
+                migrated = False
+                migration_profile: DbProfile | None = None
+                for profile in profiles:
+                    try:
+                        migrated = _migrate_existing_schema(profile, target)
+                        if migrated:
+                            migration_profile = profile
+                        break
+                    except pg_errors.InsufficientPrivilege as exc:
+                        last_error = _clean_db_error(exc)
+                        continue
+                    except psycopg2.Error as exc:
+                        last_error = _clean_db_error(exc)
+                        break
+                if not migrated:
+                    raise SchemaValidationError(
+                        "The target database uses EFOS schema 2.0.0 and must be "
+                        "migrated to 2.1.0 before startup. The additive migration "
+                        "adds public.task_availability_windows without dropping or "
+                        "recreating any table. Provide administrative credentials "
+                        "or apply the migration manually, then relaunch.",
+                        [
+                            "Missing table: public.task_availability_windows",
+                            f"Schema version: 2.0.0 (expected {SCHEMA_VERSION})",
+                            f"Migration error: {last_error or 'not permitted'}",
+                        ],
+                    )
+                _verify_target(target)
+                if (
+                    migration_profile is not None
+                    and migration_profile.user != target.user
+                ):
+                    _grant_application_role(migration_profile, target, created=False)
                 return
             if existing:
                 missing = sorted(EFOS_TABLES - existing)

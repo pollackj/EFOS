@@ -33,7 +33,9 @@ from ..config import (
 from ..db import provision_database, test_connection
 from ..errors import EFOSError
 from ..formatting import fmt_datetime
+from ..logic import availability_summary, normalize_availability_windows
 from ..models import (
+    AvailabilityWindow,
     CalendarItem,
     NodeKind,
     RecurrenceFrequency,
@@ -97,7 +99,7 @@ class CreateEntityDialog(BaseDialog):
             NodeKind.TASK: (
                 "New task",
                 "Task",
-                "Tasks become available only when every precondition is TRUE and "
+                "Tasks become Ready only when every precondition is TRUE and "
                 "every prerequisite source is complete.",
             ),
             NodeKind.PROJECT: (
@@ -143,7 +145,7 @@ class CreateEntityDialog(BaseDialog):
             self.value_combo.setMinimumHeight(36)
             self.root.addWidget(self.value_combo)
         elif kind is NodeKind.TASK:
-            self.recurring = QCheckBox("Recurring task")
+            self.recurring = GreenCheckBox("Recurring task")
             self.root.addWidget(self.recurring)
         else:
             hint = QLabel(
@@ -469,6 +471,216 @@ class RecurrenceDialog(BaseDialog):
             "end_minute": end_m,
             "removed": self.removed,
         }
+
+class AvailabilityDialog(BaseDialog):
+    """Optional temporal availability editor.
+
+    Availability is intentionally separate from Status, the scheduled block, and
+    recurrence. It defaults to 24/7 and never changes dependency evaluation.
+    """
+
+    def __init__(
+        self,
+        windows: list[AvailabilityWindow] | None = None,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(
+            parent,
+            "Availability",
+            "Choose when this Task can actually be performed in the real world. "
+            "Availability does not change its Status, schedule, or recurrence, and "
+            "it never blocks completion. Times use the local system clock.",
+            620,
+        )
+        self._values: list[AvailabilityWindow] = []
+        initial = list(windows or [])
+        self.always = GreenCheckBox("24 / 7 — always available")
+        self.always.setChecked(not initial)
+        self.always.toggled.connect(self._sync_visibility)
+        self.root.addWidget(self.always)
+
+        self.custom = QWidget()
+        custom_layout = QVBoxLayout(self.custom)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(8)
+        heading = QLabel("CUSTOM AVAILABILITY")
+        heading.setProperty("role", "sectionTitle")
+        custom_layout.addWidget(heading)
+        hint = QLabel(
+            "Select the weekdays for each window. Add as many windows as needed; a "
+            "window that ends before it starts is treated as crossing midnight."
+        )
+        hint.setProperty("role", "faint")
+        hint.setWordWrap(True)
+        custom_layout.addWidget(hint)
+
+        self.rows_host = QWidget()
+        self.rows_layout = QVBoxLayout(self.rows_host)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(6)
+        custom_layout.addWidget(self.rows_host)
+        self._rows: list[dict] = []
+
+        add_row = QHBoxLayout()
+        add_row.addStretch(1)
+        add_button = QPushButton("Add time window")
+        add_button.clicked.connect(lambda: self._add_row())
+        add_row.addWidget(add_button)
+        custom_layout.addLayout(add_row)
+
+        self.summary = QLabel("")
+        self.summary.setProperty("role", "faint")
+        self.summary.setWordWrap(True)
+        custom_layout.addWidget(self.summary)
+        self.root.addWidget(self.custom)
+
+        self.error_label = QLabel("")
+        self.error_label.setProperty("role", "danger")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        self.root.addWidget(self.error_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        save = QPushButton("Save availability")
+        save.setProperty("variant", "primary")
+        save.clicked.connect(self._validate)
+        save.setDefault(True)
+        buttons.addWidget(save)
+        self.root.addLayout(buttons)
+
+        if initial:
+            grouped: dict[tuple[int, int], set[int]] = {}
+            for window in initial:
+                grouped.setdefault((window.start_minute, window.end_minute), set()).add(
+                    window.weekday
+                )
+            for (start, end), days in sorted(grouped.items()):
+                self._add_row(days=days, start=start, end=end)
+        if not self._rows:
+            self._add_row(days=set(range(7)))
+        self._sync_visibility()
+        self._update_summary()
+
+    def _add_row(
+        self,
+        *,
+        days: set[int] | None = None,
+        start: int = 9 * 60,
+        end: int = 17 * 60,
+    ) -> None:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        checks: dict[int, QCheckBox] = {}
+        for weekday, letter in enumerate(("M", "T", "W", "T", "F", "S", "S")):
+            check = GreenCheckBox(letter)
+            check.setToolTip(("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")[weekday])
+            check.setChecked(days is None or weekday in days)
+            check.toggled.connect(self._update_summary)
+            checks[weekday] = check
+            layout.addWidget(check)
+        layout.addSpacing(6)
+        start_edit = QTimeEdit()
+        start_edit.setDisplayFormat("HH:mm")
+        start_edit.setTime(QTime((start // 60) % 24, start % 60))
+        start_edit.setMinimumWidth(76)
+        start_edit.timeChanged.connect(self._update_summary)
+        layout.addWidget(start_edit)
+        dash = QLabel("–")
+        dash.setStyleSheet(f"color: {c('muted')};")
+        layout.addWidget(dash)
+        end_edit = QTimeEdit()
+        end_edit.setDisplayFormat("HH:mm")
+        end_edit.setTime(QTime((end // 60) % 24, end % 60))
+        end_edit.setMinimumWidth(76)
+        end_edit.timeChanged.connect(self._update_summary)
+        layout.addWidget(end_edit)
+        remove = IconButton("close", "Remove this window", size=12)
+        remove.setFixedSize(24, 24)
+        remove.clicked.connect(lambda _=False, r=row: self._remove_row(r))
+        layout.addWidget(remove)
+        layout.addStretch(1)
+        entry = {
+            "widget": row,
+            "checks": checks,
+            "start": start_edit,
+            "end": end_edit,
+        }
+        self._rows.append(entry)
+        self.rows_layout.addWidget(row)
+
+    def _remove_row(self, row: QWidget) -> None:
+        for entry in list(self._rows):
+            if entry["widget"] is row:
+                self._rows.remove(entry)
+                row.hide()
+                row.setParent(None)
+                row.deleteLater()
+                break
+        self._update_summary()
+
+    def _sync_visibility(self) -> None:
+        self.custom.setVisible(not self.always.isChecked())
+        self._update_summary()
+
+    def _window_values(self) -> list[AvailabilityWindow]:
+        windows: list[AvailabilityWindow] = []
+        for entry in self._rows:
+            days = [day for day, check in entry["checks"].items() if check.isChecked()]
+            if not days:
+                raise ValueError("Select at least one weekday for each availability window.")
+            start = entry["start"].time()
+            end = entry["end"].time()
+            start_minute = start.hour() * 60 + start.minute()
+            end_minute = end.hour() * 60 + end.minute()
+            if end_minute == 0:
+                end_minute = 24 * 60
+            for day in days:
+                windows.append(AvailabilityWindow(day, start_minute, end_minute))
+        return normalize_availability_windows(windows)
+
+    def _update_summary(self) -> None:
+        if not hasattr(self, "summary"):
+            return
+        self.error_label.hide()
+        if self.always.isChecked():
+            self.summary.setText("24/7 — always available")
+            return
+        try:
+            windows = self._window_values()
+        except Exception as exc:  # noqa: BLE001 - user-facing validation text
+            self.summary.setText(str(exc))
+            return
+        self.summary.setText(
+            availability_summary(windows) if windows else "No availability windows configured."
+        )
+
+    def _validate(self) -> None:
+        if self.always.isChecked():
+            self._values = []
+            self.accept()
+            return
+        try:
+            windows = self._window_values()
+        except Exception as exc:
+            self.error_label.setText(str(exc))
+            self.error_label.show()
+            return
+        if not windows:
+            self.error_label.setText("Add at least one availability window.")
+            self.error_label.show()
+            return
+        self._values = windows
+        self.accept()
+
+    def values(self) -> list[AvailabilityWindow]:
+        return list(self._values)
+
 
 class ScheduleConflictDialog(BaseDialog):
     def __init__(self, conflicts: list[CalendarItem], parent: QWidget | None = None):

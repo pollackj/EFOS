@@ -18,7 +18,9 @@ from psycopg2.extras import Json
 
 from .db import Database
 from .errors import NotFoundError, ValidationError
+from .logic import availability_summary, normalize_availability_windows
 from .models import (
+    AvailabilityWindow,
     CalendarItem,
     ChatMessage,
     ChatThread,
@@ -99,7 +101,11 @@ def _rule_from_row(row: dict[str, Any]) -> RecurrenceRule:
         created_at=row["created_at"],
     )
 
-def _task_from_row(row: dict[str, Any], rule: RecurrenceRule | None = None) -> Task:
+def _task_from_row(
+    row: dict[str, Any],
+    rule: RecurrenceRule | None = None,
+    availability: Iterable[AvailabilityWindow] | None = None,
+) -> Task:
     return Task(
         id=str(row["id"]),
         name=row["name"],
@@ -110,6 +116,7 @@ def _task_from_row(row: dict[str, Any], rule: RecurrenceRule | None = None) -> T
         scheduled_start=row["scheduled_start"],
         scheduled_end=row["scheduled_end"],
         recurrence=rule,
+        availability=list(availability or []),
     )
 
 def _project_from_row(row: dict[str, Any]) -> Project:
@@ -169,53 +176,49 @@ class Repository:
         for row in self.db.fetch_all("SELECT * FROM public.task_recurrence_rules"):
             rule = _rule_from_row(row)
             rules[rule.task_id] = rule
+        availability: dict[str, list[AvailabilityWindow]] = {}
         for row in self.db.fetch_all(
-            "SELECT * FROM public.tasks ORDER BY created_at NULLS LAST, name"
+            "SELECT task_id, weekday, start_minute, end_minute "
+            "FROM public.task_availability_windows ORDER BY task_id, weekday, start_minute"
         ):
-            task = _task_from_row(row, rules.get(str(row["id"])))
+            availability.setdefault(str(row["task_id"]), []).append(
+                AvailabilityWindow(
+                    int(row["weekday"]),
+                    int(row["start_minute"]),
+                    int(row["end_minute"]),
+                )
+            )
+        for row in self.db.fetch_all("SELECT * FROM public.tasks ORDER BY created_at NULLS LAST, name"):
+            task = _task_from_row(
+                row,
+                rules.get(str(row["id"])),
+                availability.get(str(row["id"]), []),
+            )
             snapshot.tasks[task.id] = task
-        for row in self.db.fetch_all(
-            "SELECT * FROM public.projects ORDER BY created_at NULLS LAST, name"
-        ):
+        for row in self.db.fetch_all("SELECT * FROM public.projects ORDER BY created_at NULLS LAST, name"):
             project = _project_from_row(row)
             snapshot.projects[project.id] = project
-        for row in self.db.fetch_all(
-            "SELECT * FROM public.conditions ORDER BY created_at NULLS LAST, display_name"
-        ):
+        for row in self.db.fetch_all("SELECT * FROM public.conditions ORDER BY created_at NULLS LAST, display_name"):
             condition = _condition_from_row(row)
             snapshot.conditions[condition.id] = condition
-        for row in self.db.fetch_all(
-            "SELECT task_id, condition_id FROM public.task_preconditions"
-        ):
-            snapshot.task_preconditions.setdefault(str(row["task_id"]), set()).add(
-                str(row["condition_id"])
-            )
-        for row in self.db.fetch_all(
-            "SELECT project_id, condition_id FROM public.project_preconditions"
-        ):
-            snapshot.project_preconditions.setdefault(str(row["project_id"]), set()).add(
-                str(row["condition_id"])
-            )
-        for row in self.db.fetch_all(
-            "SELECT task_id, source_task_id, source_project_id FROM public.task_prerequisites"
-        ):
+        for row in self.db.fetch_all("SELECT task_id, condition_id FROM public.task_preconditions"):
+            snapshot.task_preconditions.setdefault(str(row["task_id"]), set()).add(str(row["condition_id"]))
+        for row in self.db.fetch_all("SELECT project_id, condition_id FROM public.project_preconditions"):
+            snapshot.project_preconditions.setdefault(str(row["project_id"]), set()).add(str(row["condition_id"]))
+        for row in self.db.fetch_all("SELECT task_id, source_task_id, source_project_id FROM public.task_prerequisites"):
             source = (
                 NodeRef(NodeKind.TASK, str(row["source_task_id"]))
                 if row["source_task_id"]
                 else NodeRef(NodeKind.PROJECT, str(row["source_project_id"]))
             )
             snapshot.task_prerequisites.setdefault(str(row["task_id"]), set()).add(source)
-        for row in self.db.fetch_all(
-            "SELECT project_id, source_task_id, source_project_id FROM public.project_prerequisites"
-        ):
+        for row in self.db.fetch_all("SELECT project_id, source_task_id, source_project_id FROM public.project_prerequisites"):
             source = (
                 NodeRef(NodeKind.TASK, str(row["source_task_id"]))
                 if row["source_task_id"]
                 else NodeRef(NodeKind.PROJECT, str(row["source_project_id"]))
             )
-            snapshot.project_prerequisites.setdefault(str(row["project_id"]), set()).add(
-                source
-            )
+            snapshot.project_prerequisites.setdefault(str(row["project_id"]), set()).add(source)
         return snapshot
 
     def get_task(self, task_id: str) -> Task:
@@ -223,36 +226,44 @@ class Repository:
         row = self.db.fetch_one("SELECT * FROM public.tasks WHERE id = %s::uuid", (task_id,))
         if not row:
             raise NotFoundError("The task no longer exists.")
-        rule_row = self.db.fetch_one(
-            "SELECT * FROM public.task_recurrence_rules WHERE task_id = %s::uuid",
+        rule_row = self.db.fetch_one("SELECT * FROM public.task_recurrence_rules WHERE task_id = %s::uuid", (task_id,))
+        availability_rows = self.db.fetch_all(
+            "SELECT weekday, start_minute, end_minute "
+            "FROM public.task_availability_windows WHERE task_id = %s::uuid "
+            "ORDER BY weekday, start_minute",
             (task_id,),
         )
-        return _task_from_row(row, _rule_from_row(rule_row) if rule_row else None)
+        availability = [
+            AvailabilityWindow(
+                int(item["weekday"]),
+                int(item["start_minute"]),
+                int(item["end_minute"]),
+            )
+            for item in availability_rows
+        ]
+        return _task_from_row(
+            row,
+            _rule_from_row(rule_row) if rule_row else None,
+            availability,
+        )
 
     def get_project(self, project_id: str) -> Project:
         project_id = as_uuid(project_id, "project id")
-        row = self.db.fetch_one(
-            "SELECT * FROM public.projects WHERE id = %s::uuid", (project_id,)
-        )
+        row = self.db.fetch_one("SELECT * FROM public.projects WHERE id = %s::uuid", (project_id,))
         if not row:
             raise NotFoundError("The project no longer exists.")
         return _project_from_row(row)
 
     def get_condition(self, condition_id: str) -> Condition:
         condition_id = as_uuid(condition_id, "condition id")
-        row = self.db.fetch_one(
-            "SELECT * FROM public.conditions WHERE id = %s::uuid", (condition_id,)
-        )
+        row = self.db.fetch_one("SELECT * FROM public.conditions WHERE id = %s::uuid", (condition_id,))
         if not row:
             raise NotFoundError("The condition no longer exists.")
         return _condition_from_row(row)
 
     def get_rule(self, task_id: str) -> RecurrenceRule | None:
         task_id = as_uuid(task_id, "task id")
-        row = self.db.fetch_one(
-            "SELECT * FROM public.task_recurrence_rules WHERE task_id = %s::uuid",
-            (task_id,),
-        )
+        row = self.db.fetch_one("SELECT * FROM public.task_recurrence_rules WHERE task_id = %s::uuid", (task_id,))
         return _rule_from_row(row) if row else None
 
     # ------------------------------------------------------------------- notes
@@ -279,22 +290,13 @@ class Repository:
         entity_id = as_uuid(entity_id, f"{kind.value} id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT note_id FROM public.{table} WHERE {column} = %s::uuid",
-                    (entity_id,),
-                )
+                cur.execute(f"SELECT note_id FROM public.{table} WHERE {column} = %s::uuid", (entity_id,))
                 row = cur.fetchone()
                 if row:
                     note_id = str(row[0])
-                    cur.execute(
-                        "UPDATE public.notes SET content = %s WHERE id = %s::uuid",
-                        (content, note_id),
-                    )
+                    cur.execute("UPDATE public.notes SET content = %s WHERE id = %s::uuid", (content, note_id))
                 else:
-                    cur.execute(
-                        "INSERT INTO public.notes (content) VALUES (%s) RETURNING id",
-                        (content,),
-                    )
+                    cur.execute("INSERT INTO public.notes (content) VALUES (%s) RETURNING id", (content,))
                     note_id = str(cur.fetchone()[0])
                     cur.execute(
                         f"INSERT INTO public.{table} ({column}, note_id) "
@@ -315,10 +317,7 @@ class Repository:
         entity_id = as_uuid(entity_id, f"{kind.value} id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT note_id FROM public.{table} WHERE {column} = %s::uuid",
-                    (entity_id,),
-                )
+                cur.execute(f"SELECT note_id FROM public.{table} WHERE {column} = %s::uuid", (entity_id,))
                 row = cur.fetchone()
                 if not row:
                     return
@@ -378,7 +377,7 @@ class Repository:
                     INSERT INTO public.tasks
                         (name, is_recurring, current_state, previous_state,
                          scheduled_start, scheduled_end)
-                    VALUES (%s, %s, 'available'::public.task_state, NULL, %s, %s)
+                    VALUES (%s, %s, 'ready'::public.task_state, NULL, %s, %s)
                     RETURNING id
                     """,
                     (name, bool(is_recurring), start, end),
@@ -416,9 +415,7 @@ class Repository:
                     {"name": name, "is_recurring": bool(is_recurring)},
                 )
 
-    def update_task_schedule(
-        self, task_id: str, start: datetime | None, end: datetime | None
-    ) -> None:
+    def update_task_schedule(self, task_id: str, start: datetime | None, end: datetime | None) -> None:
         task_id = as_uuid(task_id, "task id")
         start, end = _schedule(start, end)
         with self.db.connection() as conn:
@@ -507,25 +504,16 @@ class Repository:
         task_id = as_uuid(task_id, "task id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,)
-                )
+                cur.execute("SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 row = cur.fetchone()
                 if not row:
                     raise NotFoundError("The task no longer exists.")
                 name = row[0]
-                cur.execute(
-                    "SELECT note_id FROM public.task_notes WHERE task_id = %s::uuid",
-                    (task_id,),
-                )
+                cur.execute("SELECT note_id FROM public.task_notes WHERE task_id = %s::uuid", (task_id,))
                 note_ids = [str(item[0]) for item in cur.fetchall()]
-                cur.execute(
-                    "DELETE FROM public.task_notes WHERE task_id = %s::uuid", (task_id,)
-                )
+                cur.execute("DELETE FROM public.task_notes WHERE task_id = %s::uuid", (task_id,))
                 if note_ids:
-                    cur.execute(
-                        "DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,)
-                    )
+                    cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
                 cur.execute("DELETE FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 _insert_event(
                     cur,
@@ -573,14 +561,7 @@ class Repository:
                 )
                 if not cur.fetchone():
                     raise NotFoundError("The project no longer exists.")
-                _insert_event(
-                    cur,
-                    "project.updated",
-                    "project",
-                    project_id,
-                    f"Project renamed: {name}",
-                    {"name": name},
-                )
+                _insert_event(cur, "project.updated", "project", project_id, f"Project renamed: {name}", {"name": name})
 
     def transition_project(
         self,
@@ -634,29 +615,17 @@ class Repository:
         project_id = as_uuid(project_id, "project id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT name FROM public.projects WHERE id = %s::uuid", (project_id,)
-                )
+                cur.execute("SELECT name FROM public.projects WHERE id = %s::uuid", (project_id,))
                 row = cur.fetchone()
                 if not row:
                     raise NotFoundError("The project no longer exists.")
                 name = row[0]
-                cur.execute(
-                    "SELECT note_id FROM public.project_notes WHERE project_id = %s::uuid",
-                    (project_id,),
-                )
+                cur.execute("SELECT note_id FROM public.project_notes WHERE project_id = %s::uuid", (project_id,))
                 note_ids = [str(item[0]) for item in cur.fetchall()]
-                cur.execute(
-                    "DELETE FROM public.project_notes WHERE project_id = %s::uuid",
-                    (project_id,),
-                )
+                cur.execute("DELETE FROM public.project_notes WHERE project_id = %s::uuid", (project_id,))
                 if note_ids:
-                    cur.execute(
-                        "DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,)
-                    )
-                cur.execute(
-                    "DELETE FROM public.projects WHERE id = %s::uuid", (project_id,)
-                )
+                    cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
+                cur.execute("DELETE FROM public.projects WHERE id = %s::uuid", (project_id,))
                 _insert_event(
                     cur,
                     "project.deleted",
@@ -667,9 +636,7 @@ class Repository:
                 )
 
     # -------------------------------------------------------------- conditions
-    def create_condition(
-        self, display_name: str, *, evaluation_state: bool | None = None
-    ) -> str:
+    def create_condition(self, display_name: str, *, evaluation_state: bool | None = None) -> str:
         display_name = clean_name(display_name, label="Condition name")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
@@ -689,9 +656,7 @@ class Repository:
                 )
         return condition_id
 
-    def update_condition(
-        self, condition_id: str, *, display_name: str, evaluation_state: bool | None
-    ) -> None:
+    def update_condition(self, condition_id: str, *, display_name: str, evaluation_state: bool | None) -> None:
         condition_id = as_uuid(condition_id, "condition id")
         display_name = clean_name(display_name, label="Condition name")
         with self.db.connection() as conn:
@@ -740,30 +705,17 @@ class Repository:
         condition_id = as_uuid(condition_id, "condition id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT display_name FROM public.conditions WHERE id = %s::uuid",
-                    (condition_id,),
-                )
+                cur.execute("SELECT display_name FROM public.conditions WHERE id = %s::uuid", (condition_id,))
                 row = cur.fetchone()
                 if not row:
                     raise NotFoundError("The condition no longer exists.")
                 name = row[0]
-                cur.execute(
-                    "SELECT note_id FROM public.condition_notes WHERE condition_id = %s::uuid",
-                    (condition_id,),
-                )
+                cur.execute("SELECT note_id FROM public.condition_notes WHERE condition_id = %s::uuid", (condition_id,))
                 note_ids = [str(item[0]) for item in cur.fetchall()]
-                cur.execute(
-                    "DELETE FROM public.condition_notes WHERE condition_id = %s::uuid",
-                    (condition_id,),
-                )
+                cur.execute("DELETE FROM public.condition_notes WHERE condition_id = %s::uuid", (condition_id,))
                 if note_ids:
-                    cur.execute(
-                        "DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,)
-                    )
-                cur.execute(
-                    "DELETE FROM public.conditions WHERE id = %s::uuid", (condition_id,)
-                )
+                    cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
+                cur.execute("DELETE FROM public.conditions WHERE id = %s::uuid", (condition_id,))
                 _insert_event(
                     cur,
                     "condition.deleted",
@@ -802,10 +754,7 @@ class Repository:
                 )
                 inserted = cur.rowcount > 0
                 if inserted:
-                    cur.execute(
-                        f"SELECT display_name FROM public.conditions WHERE id = %s::uuid",
-                        (condition_id,),
-                    )
+                    cur.execute(f"SELECT display_name FROM public.conditions WHERE id = %s::uuid", (condition_id,))
                     condition_name = (cur.fetchone() or ["condition"])[0]
                     cur.execute(
                         f"SELECT name FROM public.{'tasks' if target_kind is NodeKind.TASK else 'projects'} "
@@ -1023,9 +972,7 @@ class Repository:
         until = _naive_local(until_date)
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,)
-                )
+                cur.execute("SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 row = cur.fetchone()
                 if not row:
                     raise NotFoundError("The task no longer exists.")
@@ -1084,12 +1031,7 @@ class Repository:
                 )
                 occ = latest_occurrence(temp_rule, now)
                 if occ is not None:
-                    occ_end = occ.replace(
-                        hour=int(end_hour),
-                        minute=int(end_minute),
-                        second=0,
-                        microsecond=0,
-                    )
+                    occ_end = occ.replace(hour=int(end_hour), minute=int(end_minute), second=0, microsecond=0)
                     if (int(end_hour), int(end_minute)) < (int(reset_hour), int(reset_minute)):
                         occ_end += timedelta(days=1)
                     if occ_end < now:
@@ -1114,10 +1056,7 @@ class Repository:
                         (win_start, win_end, task_id),
                     )
                 else:
-                    cur.execute(
-                        "UPDATE public.tasks SET is_recurring = true WHERE id = %s::uuid",
-                        (task_id,),
-                    )
+                    cur.execute("UPDATE public.tasks SET is_recurring = true WHERE id = %s::uuid", (task_id,))
                 _insert_event(
                     cur,
                     "task.recurrence_saved",
@@ -1136,15 +1075,11 @@ class Repository:
         task_id = as_uuid(task_id, "task id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,)
-                )
+                cur.execute("SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 row = cur.fetchone()
                 if not row:
                     raise NotFoundError("The task no longer exists.")
-                cur.execute(
-                    "DELETE FROM public.task_recurrence_rules WHERE task_id = %s::uuid", (task_id,)
-                )
+                cur.execute("DELETE FROM public.task_recurrence_rules WHERE task_id = %s::uuid", (task_id,))
                 cur.execute(
                     "UPDATE public.tasks "
                     "SET is_recurring = false, scheduled_start = NULL, scheduled_end = NULL "
@@ -1152,12 +1087,69 @@ class Repository:
                     (task_id,)
                 )
 
+                _insert_event(cur, "task.recurrence_removed", "task", task_id, f"Recurrence rule removed: {row[0]}")
+
+    def save_task_availability(
+        self, task_id: str, windows: Iterable[AvailabilityWindow]
+    ) -> None:
+        """Atomically replace a Task's custom availability windows.
+
+        An empty list restores the 24/7 default. Availability is deliberately
+        independent of ``scheduled_start``/``scheduled_end`` and recurrence.
+        """
+        task_id = as_uuid(task_id, "task id")
+        normalized = normalize_availability_windows(windows)
+        with self.db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT name FROM public.tasks WHERE id = %s::uuid",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise NotFoundError("The task no longer exists.")
+                cur.execute(
+                    "DELETE FROM public.task_availability_windows WHERE task_id = %s::uuid",
+                    (task_id,),
+                )
+                if normalized:
+                    cur.executemany(
+                        """
+                        INSERT INTO public.task_availability_windows
+                            (task_id, weekday, start_minute, end_minute)
+                        VALUES (%s::uuid, %s, %s, %s)
+                        """,
+                        [
+                            (
+                                task_id,
+                                window.weekday,
+                                window.start_minute,
+                                window.end_minute,
+                            )
+                            for window in normalized
+                        ],
+                    )
                 _insert_event(
                     cur,
-                    "task.recurrence_removed",
+                    "task.availability_changed",
                     "task",
                     task_id,
-                    f"Recurrence rule removed: {row[0]}",
+                    (
+                        f"Availability set to 24/7: {row[0]}"
+                        if not normalized
+                        else f"Availability updated: {row[0]}"
+                    ),
+                    {
+                        "always_available": not normalized,
+                        "windows": [
+                            {
+                                "weekday": window.weekday,
+                                "start_minute": window.start_minute,
+                                "end_minute": window.end_minute,
+                            }
+                            for window in normalized
+                        ],
+                    },
                 )
 
     def recurring_tasks(self) -> list[tuple[Task, RecurrenceRule]]:
@@ -1234,13 +1226,13 @@ class Repository:
                     "WHERE id = %s::uuid",
                     (window_start, window_end, task_id),
                 )
-                if state not in ("completed", "unavailable"):
+                if state not in ("completed", "blocked"):
                     return False, "already active"
                 cur.execute("SAVEPOINT recurrence_reset")
                 try:
                     cur.execute(
-                        "UPDATE public.tasks SET current_state = 'available'::public.task_state "
-                        "WHERE id = %s::uuid AND current_state IN ('completed'::public.task_state, 'unavailable'::public.task_state)",
+                        "UPDATE public.tasks SET current_state = 'ready'::public.task_state "
+                        "WHERE id = %s::uuid AND current_state IN ('completed'::public.task_state, 'blocked'::public.task_state)",
                         (task_id,),
                     )
                 except pg_errors.CheckViolation as exc:
@@ -1262,7 +1254,7 @@ class Repository:
                     "recurrence.reset",
                     "task",
                     task_id,
-                    f"Recurring task reset to available: {name}",
+                    f"Recurring task reset to ready: {name}",
                     {"window": occurrence.isoformat(), "window_end": window_end.isoformat()},
                 )
                 return True, "reset"
@@ -1388,10 +1380,7 @@ class Repository:
                         (thread_id, thread_id),
                     )
                     title_row = cur.fetchone()
-                    if title_row and int(title_row[1]) == 1 and title_row[0] in (
-                        "New conversation",
-                        "",
-                    ):
+                    if title_row and int(title_row[1]) == 1 and title_row[0] in ("New conversation", ""):
                         title = " ".join(content.split())[:60] or "New conversation"
                         cur.execute(
                             "UPDATE public.assistant_threads SET title = %s "
@@ -1404,19 +1393,10 @@ class Repository:
         thread_id = as_uuid(thread_id, "thread id")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM public.assistant_threads WHERE id = %s::uuid",
-                    (thread_id,),
-                )
+                cur.execute("DELETE FROM public.assistant_threads WHERE id = %s::uuid", (thread_id,))
                 if cur.rowcount == 0:
                     raise NotFoundError("The conversation no longer exists.")
-                _insert_event(
-                    cur,
-                    "assistant.thread_deleted",
-                    "assistant_thread",
-                    thread_id,
-                    "Assistant conversation deleted",
-                )
+                _insert_event(cur, "assistant.thread_deleted", "assistant_thread", thread_id, "Assistant conversation deleted")
 
     def rename_thread(self, thread_id: str, title: str) -> None:
         thread_id = as_uuid(thread_id, "thread id")
@@ -1449,9 +1429,7 @@ class Repository:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValidationError("The backend instruction payload cannot be empty.")
-        row = self.db.fetch_one(
-            "SELECT COALESCE(max(sort_index), -1) + 1 AS next FROM public.custom_queries"
-        )
+        row = self.db.fetch_one("SELECT COALESCE(max(sort_index), -1) + 1 AS next FROM public.custom_queries")
         next_index = int(row["next"]) if row else 0
         result = self.db.fetch_one(
             "INSERT INTO public.custom_queries (label, prompt, favorite, sort_index) "
@@ -1516,9 +1494,7 @@ class Repository:
 
     # --------------------------------------------------------------- calendar
     def calendar_account(self) -> dict[str, Any] | None:
-        return self.db.fetch_one(
-            "SELECT * FROM public.calendar_accounts ORDER BY connected_at DESC LIMIT 1"
-        )
+        return self.db.fetch_one("SELECT * FROM public.calendar_accounts ORDER BY connected_at DESC LIMIT 1")
 
     def save_calendar_account(
         self,
@@ -1544,15 +1520,7 @@ class Repository:
                 last_error = EXCLUDED.last_error,
                 last_sync_at = COALESCE(EXCLUDED.last_sync_at, public.calendar_accounts.last_sync_at)
             """,
-            (
-                account_id,
-                email,
-                calendar_id,
-                sync_token,
-                status,
-                error,
-                _naive_local(last_sync_at),
-            ),
+            (account_id, email, calendar_id, sync_token, status, error, _naive_local(last_sync_at)),
         )
 
     def calendar_sync_state(self) -> SyncState:
@@ -1777,10 +1745,12 @@ class Repository:
             "\nDEPENDENCY MODEL\n"
             "  Preconditions: condition.evaluation_state must be TRUE (NULL/UNKNOWN blocks).\n"
             "  Prerequisites: source task must be completed; source project must be resolved.\n"
-            "  Tasks: current_state ∈ {available, unavailable, completed, deferred}.\n"
+            "  Tasks: current_state ∈ {ready, blocked, completed, deferred}.\n"
             "  Projects: current_state ∈ {active, stalled, shelved, resolved}.\n"
-            "  Availability and resolution are conjunctive (AND) and derived automatically.\n"
+            "  Status and resolution are conjunctive (AND) and derived automatically.\n"
             "  projects.resolution_conditions_unknown=true blocks automated resolution.\n"
+            "  Temporal availability lives in task_availability_windows: no rows = 24/7;\n"
+            "  it never changes Task status, Project resolution, schedule, or recurrence.\n"
             "  events is append-only; no UPDATE or DELETE is permitted."
         )
         return "\n".join(lines)
@@ -1806,6 +1776,8 @@ class Repository:
             f"projects by state: {project_states}\n"
             f"condition values: {values}\n"
             f"scheduled tasks: {sum(1 for task in snapshot.tasks.values() if task.has_schedule)}\n"
+            f"custom-availability tasks: "
+            f"{sum(1 for task in snapshot.tasks.values() if task.has_custom_availability)}\n"
             f"task preconditions: {sum(len(v) for v in snapshot.task_preconditions.values())}\n"
             f"task prerequisites: {sum(len(v) for v in snapshot.task_prerequisites.values())}\n"
             f"project preconditions: {sum(len(v) for v in snapshot.project_preconditions.values())}\n"
@@ -1826,7 +1798,8 @@ class Repository:
                 )
             lines.append(
                 f"  {task.id} | {task.name} | {task.current_state.value} | "
-                f"recurring={task.is_recurring}{schedule}"
+                f"recurring={task.is_recurring}{schedule} | "
+                f"availability={availability_summary(task.availability)}"
             )
         lines.append("\nPROJECTS")
         for project in list(snapshot.projects.values())[:limit]:
@@ -1888,6 +1861,7 @@ class Repository:
             "project_preconditions",
             "task_prerequisites",
             "project_prerequisites",
+            "task_availability_windows",
             "events",
             "notes",
             "assistant_threads",

@@ -535,7 +535,7 @@ class SuggestedFocusCard(QFrame):
         self.rationale.setWordWrap(True)
         self.layout_box.addWidget(self.rationale)
         self.layout_box.addStretch(1)
-        self.empty = QLabel("No available Tasks or active Projects to recommend")
+        self.empty = QLabel("No ready Tasks or active Projects to recommend")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty.setWordWrap(True)
         self.empty.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")

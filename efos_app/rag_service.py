@@ -6,7 +6,6 @@ preset is intercepted before any model call and answered by a deterministic,
 read-only structural analyzer that is forbidden from modifying records.
 """
 from __future__ import annotations
-
 import json
 import re
 import time
@@ -15,9 +14,7 @@ from datetime import date, datetime, time as dt_time
 from decimal import Decimal
 from typing import Any, Iterable
 from uuid import UUID
-
 import requests
-
 from .config import AppConfig
 from .errors import ExternalServiceError, ReadOnlyQueryError
 from .service import EFOSService, WorkspaceView
@@ -50,7 +47,7 @@ Hard rules:
 - Never query information_schema, pg_catalog, or any pg_* object.
 - Use explicit UUID casts, e.g. id = 'UUID'::uuid.
 - Timestamps are timestamp without time zone in local time.
-- A Task is available only when every attached precondition is TRUE and every
+- A Task is ready only when every attached precondition is TRUE and every
   prerequisite source Task is completed or source Project is resolved.
 - Select only useful columns; never SELECT *.
 - Add LIMIT 200 or less.
@@ -59,27 +56,21 @@ Hard rules:
 Return exactly one JSON object and no markdown:
 {"sql":"SELECT ...","title":"short result title"}
 If the question cannot be answered from this schema, return
-{"sql":"","title":"unavailable"}."""
+{"sql":"","title":"blocked"}."""
 
 _HEURISTIC_QUERY = re.compile(
     r"\b(how many|count|list|show|which|what|when|where|who|status|state|"
-    r"tasks?|projects?|conditions?|scheduled|schedule|due|completed|available|"
-    r"unavailable|deferred|resolved|stalled|shelved|prerequisite|precondition|"
+    r"tasks?|projects?|conditions?|scheduled|schedule|due|completed|ready|"
+    r"blocked|deferred|resolved|stalled|shelved|prerequisite|precondition|"
     r"uuid|database|table|query|rows?)\b",
     re.IGNORECASE,
 )
 
-_PRIORITY_RE = re.compile(
-    r"top\s*(3|three)\s*priorit", re.IGNORECASE
-)
-
+_PRIORITY_RE = re.compile(r"top\s*(3|three)\s*priorit", re.IGNORECASE)
 
 def is_priority_request(text: str) -> bool:
     cleaned = " ".join((text or "").strip().split())
-    return cleaned.casefold() == PRIORITY_PROMPT.casefold() or bool(
-        _PRIORITY_RE.search(cleaned)
-    )
-
+    return cleaned.casefold() == PRIORITY_PROMPT.casefold() or bool(_PRIORITY_RE.search(cleaned))
 
 @dataclass(slots=True)
 class ChatAnswer:
@@ -93,7 +84,6 @@ class ChatAnswer:
     elapsed_ms: int = 0
     route_reason: str = ""
     model_calls: int = 0
-
 
 class RagPipeline:
     def __init__(self, config: AppConfig, service: EFOSService):
@@ -118,15 +108,11 @@ class RagPipeline:
                 text=narrative,
                 context_chars=0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
-                route_reason=(
-                    f"local read-only analyzer · {len(items)} available task(s) selected"
-                ),
+                route_reason=(f"local read-only analyzer · {len(items)} ready task(s) selected"),
                 model_calls=0,
             )
         if not self.config.deepseek_enabled:
-            raise ExternalServiceError(
-                "DEEPSEEK_API_KEY is not configured. Add it to the .env profile."
-            )
+            raise ExternalServiceError("DEEPSEEK_API_KEY is not configured. Add it to the .env profile.")
         recent = _recent_history(history)
         route, reason = self._route(question, recent)
         context = self.service.rag_context(view)
@@ -172,9 +158,7 @@ class RagPipeline:
             {"role": "system", "content": ROUTER_RULES},
             {"role": "user", "content": _with_history(question, history)},
         ]
-        content = self._complete(
-            messages, temperature=0.0, max_tokens=60, json_mode=True
-        )
+        content = self._complete(messages, temperature=0.0, max_tokens=60, json_mode=True)
         payload = _extract_json(content)
         intent = str(payload.get("intent", "")).upper()
         if intent in ("QUERY", "CHAT"):
@@ -183,9 +167,7 @@ class RagPipeline:
         return heuristic, "local fallback route"
 
     # --------------------------------------------------------------- pass 2
-    def _compile_query(
-        self, question: str, history: list[dict[str, str]], context: str
-    ) -> tuple[str, str]:
+    def _compile_query(self, question: str, history: list[dict[str, str]], context: str) -> tuple[str, str]:
         user = (
             "DATABASE CONTEXT\n"
             f"{context}\n\n"
@@ -194,13 +176,8 @@ class RagPipeline:
             f"QUESTION:\n{question}\n\n"
             "Compile one SELECT. Return the JSON object now."
         )
-        messages = [
-            {"role": "system", "content": SQL_RULES},
-            {"role": "user", "content": user},
-        ]
-        content = self._complete(
-            messages, temperature=0.0, max_tokens=1000, json_mode=True
-        )
+        messages = [{"role": "system", "content": SQL_RULES}, {"role": "user", "content": user}]
+        content = self._complete(messages, temperature=0.0, max_tokens=1000, json_mode=True)
         payload = _extract_json(content)
         sql = str(payload.get("sql", "")).strip()
         title = str(payload.get("title", "") or "Query result").strip()[:80]
@@ -211,18 +188,12 @@ class RagPipeline:
         safe_sql = validate_readonly_sql(sql)
         return safe_sql, title
 
-    def _execute_query(
-        self, sql: str
-    ) -> tuple[list[str], list[dict[str, Any]], str]:
+    def _execute_query(self, sql: str) -> tuple[list[str], list[dict[str, Any]], str]:
         columns, rows = self.service.run_readonly_query(sql)
-        normalized = [
-            {key: _display_value(value) for key, value in row.items()} for row in rows
-        ]
+        normalized = [{key: _display_value(value) for key, value in row.items()} for row in rows]
         return columns, normalized, sql
 
-    def _chat(
-        self, question: str, history: list[dict[str, str]], context: str
-    ) -> str:
+    def _chat(self, question: str, history: list[dict[str, str]], context: str) -> str:
         messages = [
             {"role": "system", "content": TONAL_RULES},
             {
@@ -235,20 +206,11 @@ class RagPipeline:
                 ),
             },
         ]
-        content = self._complete(
-            messages, temperature=0.2, max_tokens=600, json_mode=False
-        )
+        content = self._complete(messages, temperature=0.2, max_tokens=600, json_mode=False)
         return _tone_filter(content)
 
     # ---------------------------------------------------------------- HTTP
-    def _complete(
-        self,
-        messages: list[dict[str, str]],
-        *,
-        temperature: float,
-        max_tokens: int,
-        json_mode: bool,
-    ) -> str:
+    def _complete(self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int, json_mode: bool,) -> str:
         url = f"{self.config.deepseek_base_url}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.config.deepseek_model,
@@ -270,9 +232,7 @@ class RagPipeline:
                 timeout=45,
             )
         except requests.RequestException as exc:
-            raise ExternalServiceError(
-                f"DeepSeek network request failed ({type(exc).__name__})."
-            ) from exc
+            raise ExternalServiceError(f"DeepSeek network request failed ({type(exc).__name__}).") from exc
         if response.status_code != 200:
             detail = ""
             try:
@@ -281,9 +241,7 @@ class RagPipeline:
             except (ValueError, AttributeError):
                 pass
             suffix = f" {detail}" if detail else ""
-            raise ExternalServiceError(
-                f"DeepSeek returned HTTP {response.status_code}.{suffix}"
-            )
+            raise ExternalServiceError(f"DeepSeek returned HTTP {response.status_code}.{suffix}")
         try:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
@@ -292,7 +250,6 @@ class RagPipeline:
         if not isinstance(content, str) or not content.strip():
             raise ExternalServiceError("DeepSeek returned an empty response.")
         return content.strip()
-
 
 def _recent_history(history: Iterable[dict[str, str]] | None) -> list[dict[str, str]]:
     if not history:
@@ -305,19 +262,15 @@ def _recent_history(history: Iterable[dict[str, str]] | None) -> list[dict[str, 
             cleaned.append({"role": role, "content": content[:1600]})
     return cleaned
 
-
 def _history_text(history: list[dict[str, str]]) -> str:
     return "\n".join(f"{m['role'].upper()}: {m['content']}" for m in history)
-
 
 def _with_history(question: str, history: list[dict[str, str]]) -> str:
     prior = _history_text(history)
     return f"PRIOR MESSAGES:\n{prior or '(none)'}\n\nLATEST MESSAGE:\n{question}"
 
-
 def _heuristic_query(question: str) -> bool:
     return bool(_HEURISTIC_QUERY.search(question))
-
 
 def _extract_json(text: str) -> dict[str, Any]:
     cleaned = text.strip()
@@ -339,7 +292,6 @@ def _extract_json(text: str) -> dict[str, Any]:
         raise ExternalServiceError("The model returned a non-object JSON value.")
     return value
 
-
 def _display_value(value: Any) -> Any:
     if isinstance(value, UUID):
         return str(value)
@@ -355,22 +307,65 @@ def _display_value(value: Any) -> Any:
         return json.dumps(value, default=str, ensure_ascii=False)
     return value
 
+def _fmt_ts(raw: Any) -> str:
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(raw))
+        return dt.strftime("%a %b %d, %H:%M")
+    except ValueError:
+        return str(raw)
 
-def _summarize_result(
-    title: str, columns: list[str], rows: list[dict[str, Any]]
-) -> str:
-    prefix = f"{title}: " if title else ""
+def _summarize_result(title: str, columns: list[str], rows: list[dict[str, Any]]) -> str:
+    header = f"{title} ({len(rows)})" if title else f"Results ({len(rows)})"
     if not rows:
-        return f"{prefix}0 rows returned."
+        return f"{title}: No matching records found." if title else "No matching records found."
     if len(rows) == 1 and len(columns) == 1:
+        prefix = f"{title}: " if title else ""
         value = rows[0].get(columns[0])
-        rendered = "NULL" if value is None else str(value)
-        return f"{prefix}{columns[0]} = {rendered}"
-    return (
-        f"{prefix}{len(rows)} row{'s' if len(rows) != 1 else ''} returned. "
-        f"Columns: {', '.join(columns)}."
-    )
+        rendered = "None" if value is None else str(value)
+        return f"{prefix}{rendered}"
 
+    lines = [header, ""]
+    for row in rows[:50]:
+        name = row.get("name") or row.get("display_name") or row.get("title")
+        state = row.get("current_state") or row.get("evaluation_state") or row.get("state")
+        start = _fmt_ts(row.get("scheduled_start"))
+        end = _fmt_ts(row.get("scheduled_end"))
+
+        headline = f"• {name}" if name else "• Record"
+        if state:
+            headline += f"  [{str(state).upper()}]"
+        lines.append(headline)
+
+        details: list[str] = []
+        if start and end:
+            same_day = start[:10] == end[:10]
+            end_part = end[12:] if same_day else end
+            details.append(f"Window: {start} – {end_part}")
+        elif start:
+            details.append(f"Starts: {start}")
+
+        handled = {
+            "id", "name", "display_name", "title", "current_state",
+            "evaluation_state", "state", "scheduled_start", "scheduled_end",
+            "created_at", "updated_at",
+        }
+        for col in columns:
+            if col in handled:
+                continue
+            val = row.get(col)
+            if val is None or val == "":
+                continue
+            label = col.replace("_", " ").capitalize()
+            details.append(f"{label}: {val}")
+
+        if details:
+            lines.append(f"    {' · '.join(details)}")
+
+    if len(rows) > 50:
+        lines.append(f"\n… and {len(rows) - 50} more.")
+    return "\n".join(lines)
 
 def _tone_filter(text: str) -> str:
     lines = []

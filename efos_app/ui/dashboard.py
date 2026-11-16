@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..formatting import fmt_relative, schedule_span, truncate
+from ..logic import availability_summary
 from ..models import NodeKind, NodeRef, ProjectState, TaskState
 from ..service import EFOSService, WorkspaceView
 from .flow_page import FlowWorkspace
@@ -39,10 +40,10 @@ def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
         elif child is not None:
             _clear_layout(child)
 
-class AvailabilityRing(QWidget):
-    def __init__(self, available: int, active: int, parent: QWidget | None = None):
+class StatusRing(QWidget):
+    def __init__(self, ready: int, active: int, parent: QWidget | None = None):
         super().__init__(parent)
-        self.available = available
+        self.ready = ready
         self.active = max(active, 1)
         self.setFixedSize(148, 148)
 
@@ -53,7 +54,7 @@ class AvailabilityRing(QWidget):
         painter.setPen(QPen(QColor(c("border")), 9, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawArc(rect, 0, 360 * 16)
-        fraction = min(1.0, self.available / self.active) if self.active else 0.0
+        fraction = min(1.0, self.ready / self.active) if self.active else 0.0
         gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
         gradient.setColorAt(0, QColor(c("accent")))
         gradient.setColorAt(1, QColor(c("teal")))
@@ -65,7 +66,7 @@ class AvailabilityRing(QWidget):
         font = QFont("Segoe UI Variable Display", 25)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
-        painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignmentFlag.AlignCenter, str(self.available))
+        painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignmentFlag.AlignCenter, str(self.ready))
         painter.setPen(QColor(c("muted")))
         small = QFont("Segoe UI", 8)
         small.setBold(True)
@@ -101,12 +102,11 @@ class OverviewPage(QWidget):
         active = [
             task for task in snapshot.tasks.values() if task.current_state.is_active
         ]
-        available = [
+        ready = [
             task
             for task in active
-            if task.current_state is TaskState.AVAILABLE
-            and view.evaluation.task_status(task.id).available
-            and (not hasattr(task, "is_currently_actionable") or task.is_currently_actionable)
+            if task.current_state is TaskState.READY
+            and view.evaluation.task_status(task.id).ready
         ]
         projects = list(snapshot.projects.values())
         open_projects = [p for p in projects if p.current_state.is_open]
@@ -115,8 +115,8 @@ class OverviewPage(QWidget):
             (task for task in active if task.has_schedule),
             key=lambda task: task.scheduled_start or datetime.max,
         )
-        self.content.addWidget(self._hero(available=len(available), active=len(active), projects=len(open_projects)))
-        self.content.addLayout(self._metrics(view, available, open_projects, stalled, scheduled))
+        self.content.addWidget(self._hero(ready=len(ready), active=len(active), projects=len(open_projects)))
+        self.content.addLayout(self._metrics(view, ready, open_projects, stalled, scheduled))
         if not snapshot.tasks and not snapshot.projects and not snapshot.conditions:
             self.content.addWidget(self._empty())
             self.content.addStretch(1)
@@ -125,7 +125,7 @@ class OverviewPage(QWidget):
         grid.setSpacing(16)
         left = QVBoxLayout()
         left.setSpacing(16)
-        left.addWidget(self._available_card(available, view))
+        left.addWidget(self._ready_card(ready, view))
         left.addWidget(self._schedule_card(scheduled))
         right = QVBoxLayout()
         right.setSpacing(16)
@@ -137,7 +137,7 @@ class OverviewPage(QWidget):
         self.content.addStretch(1)
 
     # ------------------------------------------------------------------ hero
-    def _hero(self, *, available: int, active: int, projects: int) -> QWidget:
+    def _hero(self, *, ready: int, active: int, projects: int) -> QWidget:
         hero = QFrame()
         hero.setObjectName("HeroCard")
         hero.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -161,7 +161,7 @@ class OverviewPage(QWidget):
             "font-size: 29px; font-weight: 650;"
         )
         left.addWidget(title)
-        description = QLabel("Task availability and Project resolution is based on satisfying preconditions and prerequisites. ")
+        description = QLabel("Task status and Project resolution is based on satisfying preconditions and prerequisites. ")
         description.setStyleSheet(f"color: {c('muted')}; font-size: 12px;")
         description.setWordWrap(True)
         left.addWidget(description)
@@ -169,7 +169,7 @@ class OverviewPage(QWidget):
         stats = QHBoxLayout()
         stats.setSpacing(22)
         for value, label, tone in (
-            (str(available), "ready now", "green"),
+            (str(ready), "ready now", "green"),
             (str(active), "active tasks", "task"),
             (str(projects), "open projects", "project"),
         ):
@@ -202,19 +202,19 @@ class OverviewPage(QWidget):
         actions.addStretch(1)
         left.addLayout(actions)
         layout.addLayout(left, 1)
-        layout.addWidget(AvailabilityRing(available, max(active, 1)), 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(StatusRing(ready, max(active, 1)), 0, Qt.AlignmentFlag.AlignVCenter)
         return hero
 
-    def _metrics(self, view, available, projects, stalled, scheduled) -> QHBoxLayout:  # type: ignore[no-untyped-def]
+    def _metrics(self, view, ready, projects, stalled, scheduled) -> QHBoxLayout:  # type: ignore[no-untyped-def]
         layout = QHBoxLayout()
         layout.setSpacing(14)
         blocked = sum(
             1
             for task in view.snapshot.tasks.values()
-            if task.current_state is TaskState.UNAVAILABLE
+            if task.current_state is TaskState.BLOCKED
         )
         cards = [
-            ("Available tasks", str(len(available)), "barriers fully cleared", "task", "task"),
+            ("Ready tasks", str(len(ready)), "barriers fully cleared", "task", "task"),
             ("Open projects", str(len(projects)), f"{len(stalled)} stalled", "project", "project"),
             ("Scheduled blocks", str(len(scheduled)), "local timeline", "calendar", "accent"),
             ("Blocked tasks", str(blocked), "unresolved dependency", "lock", "amber"),
@@ -223,8 +223,8 @@ class OverviewPage(QWidget):
             layout.addWidget(MetricCard(label, value, hint, icon_name, tone), 1)
         return layout
 
-    # ------------------------------------------------------------- available
-    def _available_card(self, available, view) -> QWidget:  # type: ignore[no-untyped-def]
+    # ------------------------------------------------------------- ready
+    def _ready_card(self, ready, view) -> QWidget:  # type: ignore[no-untyped-def]
         frame = Card()
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -234,22 +234,22 @@ class OverviewPage(QWidget):
         action.clicked.connect(self.open_dashboard)
         layout.addWidget(
             SectionHeader(
-                "Available now",
+                "Ready now",
                 "Tasks whose conjunctive dependency barrier is satisfied."
-                if available
+                if ready
                 else "No task currently satisfies every dependency.",
                 action,
             )
         )
         layout.addWidget(Divider())
-        if not available:
-            empty = QLabel("No available tasks. Resolve a precondition or complete a prerequisite.")
+        if not ready:
+            empty = QLabel("No ready tasks. Resolve a precondition or complete a prerequisite.")
             empty.setProperty("role", "muted")
             empty.setWordWrap(True)
             empty.setContentsMargins(4, 14, 4, 14)
             layout.addWidget(empty)
             return frame
-        for task in sorted(available, key=lambda item: (
+        for task in sorted(ready, key=lambda item: (
                 item.scheduled_start is None,
                 item.scheduled_start or datetime.max,
                 item.name.casefold(),
@@ -269,11 +269,14 @@ class OverviewPage(QWidget):
             title = QLabel(truncate(task.name, 54))
             title.setStyleSheet(f"color: {c('text')}; font-size: 12px; font-weight: 600;")
             text.addWidget(title)
-            meta = QLabel(schedule_span(task) if task.has_schedule else "No schedule block")
+            meta_parts = [schedule_span(task)]
+            if task.has_custom_availability:
+                meta_parts.append(availability_summary(task.availability))
+            meta = QLabel(" · ".join(meta_parts))
             meta.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
             text.addWidget(meta)
             row_layout.addLayout(text, 1)
-            row_layout.addWidget(Badge("AVAILABLE", "available"))
+            row_layout.addWidget(Badge("READY", "ready"))
             row.clicked.connect(lambda _=False, tid=task.id: self.open_node.emit(NodeRef(NodeKind.TASK, tid)))
             layout.addWidget(row)
         layout.addStretch(1)
@@ -330,12 +333,7 @@ class OverviewPage(QWidget):
             when.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
             text.addWidget(when)
             row_layout.addLayout(text, 1)
-            
-            # If a task is available but sits outside its calendar bounds tonight, label it accurately
-            if task.current_state.value == "available" and (hasattr(task, "is_currently_actionable") and not task.is_currently_actionable):
-                row_layout.addWidget(Badge("SCHEDULED", "amber"))
-            else:
-                row_layout.addWidget(Badge(task.current_state.label, task.current_state.value))
+            row_layout.addWidget(Badge(task.current_state.label, task.current_state.value))
 
             row.clicked.connect(lambda _=False, tid=task.id: self.open_node.emit(NodeRef(NodeKind.TASK, tid)))
             layout.addWidget(row)
@@ -617,7 +615,7 @@ class DashboardPage(QWidget):
                         task.name,
                         "task",
                         task.current_state.value,
-                        schedule_span(task),
+                        self._task_meta(task),
                     )
                     for task in active_tasks
                 ],
@@ -663,6 +661,13 @@ class DashboardPage(QWidget):
             )
         )
         self.manage_content.addStretch(1)
+
+    @staticmethod
+    def _task_meta(task) -> str:  # type: ignore[no-untyped-def]
+        parts = [schedule_span(task)]
+        if task.has_custom_availability:
+            parts.append(availability_summary(task.availability))
+        return " · ".join(parts)
 
     def _group(self, title: str, subtitle: str, rows: list[QWidget], *, empty: str) -> QWidget:
         frame = Card()

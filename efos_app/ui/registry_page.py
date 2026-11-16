@@ -24,8 +24,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ..errors import EFOSError
-from ..formatting import fmt_relative, schedule_span, truncate
-from ..logic import condition_truth_label
+from ..formatting import fmt_relative, recurrence_span, schedule_span, truncate
+from ..logic import availability_summary, condition_truth_label
 from ..models import (
     NodeKind,
     NodeRef,
@@ -40,7 +40,7 @@ from .theme import c, rgba
 from .widgets import EmptyState, SegmentedControl
 
 
-TASK_HEADERS = ["TASK", "STATE", "CONDITIONS", "RECURRING", "CREATED"]
+TASK_HEADERS = ["TASK", "STATUS", "CONDITIONS", "RECURRING", "CREATED"]
 PROJECT_HEADERS = ["PROJECT", "STATE", "CONDITIONS", "CREATED"]
 CONDITION_HEADERS = ["CONDITION", "VALUE", "CREATED"]
 ALL_HEADERS = ["OBJECT", "TYPE", "STATE", "CONDITIONS", "CREATED"]
@@ -375,8 +375,10 @@ class RegistryPage(QWidget):
                     "created": task.created_at,
                     "value": None,
                     "tooltip": (
-                        f"{task.name}\nState: {task.current_state.label}\n"
-                        f"{schedule_span(task)}"
+                        f"{task.name}\nStatus: {task.current_state.label}\n"
+                        f"Availability: {availability_summary(task.availability)}\n"
+                        f"Schedule: {schedule_span(task)}\n"
+                        f"Recurrence: {recurrence_span(task)}"
                     ),
                     "meta": schedule_span(task),
                 }
@@ -485,8 +487,8 @@ class RegistryPage(QWidget):
 
     def _cells(self, row: dict, keys: list[str]) -> list[tuple[str, str, str]]:
         colors = {
-            "available": c("green"),
-            "unavailable": c("faint"),
+            "ready": c("green"),
+            "blocked": c("faint"),
             "completed": c("blue"),
             "deferred": c("amber"),
             "active": c("accent"),
@@ -505,23 +507,12 @@ class RegistryPage(QWidget):
                 cells.append((str(row["kind"]).title(), c("muted"), "left"))
 
             elif key == "state":
-                is_future_gated = False
-                if row["kind"] == "task" and row["state"] == "available":
-                    task_obj = self.view.snapshot.tasks.get(row["ref"].id)
-                    if task_obj and hasattr(task_obj, "is_currently_actionable") and not task_obj.is_currently_actionable:
-                        is_future_gated = True
-
-                if is_future_gated:
-                    label = "Scheduled"
-                    color_value = c("amber")
-                else:
-                    label = (
-                        condition_truth_label(row["value"])
-                        if row["kind"] == "condition"
-                        else str(row["state"]).title()
-                    )
-                    color_value = colors.get(str(row["state"]), c("text_soft"))
-                    
+                label = (
+                    condition_truth_label(row["value"])
+                    if row["kind"] == "condition"
+                    else str(row["state"]).title()
+                )
+                color_value = colors.get(str(row["state"]), c("text_soft"))
                 cells.append((label, color_value, "left"))
 
             elif key == "conditions":
