@@ -5,7 +5,6 @@ edge kinds — a Condition → entity Precondition and an entity → entity
 Prerequisite. Logic gates, composition, and parent-membership shapes are gone.
 """
 from __future__ import annotations
-
 import json
 import math
 from pathlib import Path
@@ -25,13 +24,7 @@ from PyQt6.QtGui import (
     QPixmap,
     QPolygonF,
 )
-from PyQt6.QtWidgets import (
-    QGraphicsItem,
-    QGraphicsObject,
-    QGraphicsPathItem,
-    QGraphicsScene,
-    QGraphicsView,
-)
+from PyQt6.QtWidgets import (QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene, QGraphicsView)
 
 from ..formatting import fmt_datetime
 from ..logic import condition_truth_label, gate_summary
@@ -57,16 +50,8 @@ NODE_GAP_X = 92.0
 NODE_GAP_Y = 36.0
 COLUMN_GAP = 92.0
 
-KIND_COLOR = {
-    NodeKind.TASK: "task",
-    NodeKind.PROJECT: "project",
-    NodeKind.CONDITION: "condition",
-}
-KIND_ICON = {
-    NodeKind.TASK: "task",
-    NodeKind.PROJECT: "project",
-    NodeKind.CONDITION: "condition",
-}
+KIND_COLOR = {NodeKind.TASK: "task", NodeKind.PROJECT: "project", NodeKind.CONDITION: "condition"}
+KIND_ICON = {NodeKind.TASK: "task", NodeKind.PROJECT: "project", NodeKind.CONDITION: "condition"}
 
 class LayoutStore:
     """Node coordinates are UI state, so the canonical schema stays untouched."""
@@ -397,15 +382,7 @@ class FlowNodeItem(QGraphicsObject):
                 interactive=True,
             )
 
-    def _draw_pill(
-        self,
-        painter: QPainter,
-        rect: QRectF,
-        text: str,
-        color: QColor,
-        *,
-        interactive: bool = False,
-    ) -> None:
+    def _draw_pill(self, painter: QPainter, rect: QRectF, text: str, color: QColor, *, interactive: bool = False) -> None:
         painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 80), 1))
         painter.setBrush(QColor(color.red(), color.green(), color.blue(), 28 if interactive else 18))
         painter.drawRoundedRect(rect, 7, 7)
@@ -661,73 +638,109 @@ class FlowScene(QGraphicsScene):
             return 1
         return 1 + max(self._depth(view, source, seen) for source in sources)
 
-    def _compute_auto_layout(
-        self, view: WorkspaceView, refs: list[NodeRef]
-    ) -> dict[str, tuple[float, float]]:
+    def _compute_auto_layout(self, view: WorkspaceView, refs: list[NodeRef]) -> dict[str, tuple[float, float]]:
         positions: dict[str, tuple[float, float]] = {}
         snapshot = view.snapshot
-        
-        # Gather all edges for quick lookup of connection status
-        all_edges = list(snapshot.edges())
-        connected_refs = set()
-        for edge in all_edges:
-            connected_refs.add(edge.source)
-            connected_refs.add(edge.target)
+        ref_set = set(refs)
 
-        # 1. Separate connected chain items from standalone items
+        all_edges = [
+            edge
+            for edge in snapshot.edges()
+            if edge.source in ref_set and edge.target in ref_set
+        ]
+        connected_refs = {e.source for e in all_edges} | {e.target for e in all_edges}
+
         chain_refs = [ref for ref in refs if ref in connected_refs]
         standalone_tasks = [ref for ref in refs if ref.kind == NodeKind.TASK and ref not in connected_refs]
         standalone_projects = [ref for ref in refs if ref.kind == NodeKind.PROJECT and ref not in connected_refs]
-        conditions = [ref for ref in refs if ref.kind == NodeKind.CONDITION] # conditions can also be handled
+        standalone_conditions = [ref for ref in refs if ref.kind == NodeKind.CONDITION and ref not in connected_refs]
 
-        # 2. Layout Connected Chains on the Left
-        chain_layers: dict[int, list[NodeRef]] = {}
+        # Build incoming adjacency map (target -> sorted upstream sources)
+        incoming: dict[NodeRef, list[NodeRef]] = {ref: [] for ref in chain_refs}
+        outgoing: dict[NodeRef, list[NodeRef]] = {ref: [] for ref in chain_refs}
+        for edge in all_edges:
+            incoming[edge.target].append(edge.source)
+            outgoing[edge.source].append(edge.target)
         for ref in chain_refs:
-            chain_layers.setdefault(self._depth(view, ref), []).append(ref)
+            incoming[ref].sort(key=lambda r: (r.kind.value, snapshot.get_name(r).casefold()))
+
+        # Sinks are the rightmost nodes in each connected chain (e.g., Projects)
+        sinks = sorted(
+            [ref for ref in chain_refs if not outgoing[ref]],
+            key=lambda r: (0 if r.kind == NodeKind.PROJECT else 1, snapshot.get_name(r).casefold()),
+        )
+
+        # Forward depth from roots (0 = Task/Condition on left, 1+ = Project on right)
+        fwd_depth: dict[NodeRef, int] = {}
+
+        def _calc_fwd_depth(node: NodeRef, visiting: set[NodeRef]) -> int:
+            if node in fwd_depth:
+                return fwd_depth[node]
+            if node in visiting:
+                return 0
+            visiting.add(node)
+            preds = incoming.get(node, [])
+            d = 0 if not preds else 1 + max(_calc_fwd_depth(p, visiting) for p in preds)
+            visiting.remove(node)
+            fwd_depth[node] = d
+            return d
+
+        for ref in chain_refs:
+            _calc_fwd_depth(ref, set())
 
         left_margin = 40.0
         top_margin = 40.0
         step_x = NODE_WIDTH + COLUMN_GAP
         step_y = NODE_HEIGHT + NODE_GAP_Y
 
-        max_chain_x = left_margin
-        for layer in sorted(chain_layers):
-            items = sorted(chain_layers[layer], key=lambda item: (item.kind.value, snapshot.get_name(item).casefold()))
-            layer_x = left_margin + (layer - 1) * step_x if chain_layers else left_margin
-            max_chain_x = max(max_chain_x, layer_x)
-            for index, ref in enumerate(items):
-                positions[ref.key] = (layer_x, top_margin + index * step_y)
+        # Place each sink cluster top-to-bottom, centering targets on their upstream block
+        placed: set[NodeRef] = set()
+        cursor_y = top_margin
 
-        # Fallback if no chains exist
-        if not chain_refs:
-            max_chain_x = left_margin + step_x
+        def _place_subtree(node: NodeRef) -> float:
+            nonlocal cursor_y
+            placed.add(node)
+            col = fwd_depth.get(node, 0)
+            x = left_margin + col * step_x
+            unplaced_preds = [p for p in incoming.get(node, []) if p not in placed]
+            if not unplaced_preds:
+                y = cursor_y
+                cursor_y += step_y
+                positions[node.key] = (x, y)
+                return y
+            child_ys = [_place_subtree(p) for p in unplaced_preds]
+            y = (min(child_ys) + max(child_ys)) / 2.0
+            positions[node.key] = (x, y)
+            return y
 
-        # 3. Layout Standalone Items on the Right (Two clean columns)
-        standalone_start_x = max_chain_x + step_x + 80.0  # Gap separating chains from standalones
-        
-        # Standalone Tasks Column
-        task_x = standalone_start_x
+        for sink in sinks:
+            if sink not in placed:
+                _place_subtree(sink)
+                cursor_y += NODE_GAP_Y * 0.5  # Extra breathing room between project groups
+
+        for ref in sorted(chain_refs, key=lambda r: snapshot.get_name(r).casefold()):
+            if ref not in placed:
+                _place_subtree(ref)
+
+        max_chain_x = max((pos[0] for pos in positions.values()), default=left_margin - step_x)
+
+        # Standalone items on the right
+        standalone_start_x = max_chain_x + step_x + 80.0
         for index, ref in enumerate(sorted(standalone_tasks, key=lambda r: snapshot.get_name(r).casefold())):
-            positions[ref.key] = (task_x, top_margin + index * step_y)
+            positions[ref.key] = (standalone_start_x, top_margin + index * step_y)
 
-        # Standalone Projects Column (placed to the right of standalone tasks)
         project_x = standalone_start_x + step_x + 40.0
         for index, ref in enumerate(sorted(standalone_projects, key=lambda r: snapshot.get_name(r).casefold())):
             positions[ref.key] = (project_x, top_margin + index * step_y)
 
-        # Handle any leftover conditions
-        cond_x = left_margin
-        cond_y = top_margin + (len(chain_refs) * step_y) + 60.0
-        for ref in conditions:
-            if ref.key not in positions:
-                positions[ref.key] = (cond_x, cond_y)
-                cond_y += NODE_HEIGHT + NODE_GAP_Y
+        cond_x = standalone_start_x
+        cond_y = top_margin + len(standalone_tasks) * step_y + (60.0 if standalone_tasks else 0.0)
+        for index, ref in enumerate(sorted(standalone_conditions, key=lambda r: snapshot.get_name(r).casefold())):
+            positions[ref.key] = (cond_x, cond_y + index * step_y)
 
         return positions
 
-    def _new_node_position(
-        self, ref: NodeRef, existing: dict[str, tuple[float, float]]
-    ) -> tuple[float, float]:
+    def _new_node_position(self, ref: NodeRef, existing: dict[str, tuple[float, float]]) -> tuple[float, float]:
         kind_positions = [(key, pos) for key, pos in existing.items() if key.split(":", 1)[0] == ref.kind.value]
         base_x = {NodeKind.CONDITION: 40.0, NodeKind.TASK: 420.0, NodeKind.PROJECT: 800.0}[ref.kind]
         if kind_positions:
