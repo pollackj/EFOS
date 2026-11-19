@@ -79,3 +79,26 @@ def qapp():
 
     apply_theme(app, "dark")
     yield app
+
+
+@pytest.fixture(autouse=True)
+def google_offline(monkeypatch):
+    """Keep the suite off Google's network and out of the browser.
+
+    A developer workstation can hold real Google OAuth tokens in the Windows
+    Credential Manager, and the Calendar page now auto-syncs stored credentials
+    when they are stale. UI tests must stay deterministic and offline, so the
+    token/connection probes are stubbed for every test. The OAuth hand-off
+    itself is covered directly in ``tests/test_calendar_service.py``.
+    """
+    from efos_app.calendar_service import GoogleOAuthClient
+    from efos_app.errors import AuthenticationRequiredError
+
+    monkeypatch.setattr(GoogleOAuthClient, "connected", lambda self: False)
+
+    def _denied(self):
+        raise AuthenticationRequiredError(
+            "Google Calendar credentials are disabled in the test suite."
+        )
+
+    monkeypatch.setattr(GoogleOAuthClient, "access_token", _denied)

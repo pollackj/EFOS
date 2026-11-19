@@ -4,9 +4,7 @@ One component owns property editing, dependency attachment/removal, recurrence,
 schedules, notes (blur-save), lifecycle actions, and the canvas gesture guide.
 """
 from __future__ import annotations
-
 from datetime import datetime, timedelta
-
 from PyQt6.QtCore import QDateTime, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QCursor, QFont
 from PyQt6.QtWidgets import (
@@ -34,12 +32,7 @@ from ..formatting import (
     schedule_span,
     truncate,
 )
-from ..logic import (
-    availability_state_text,
-    availability_summary,
-    condition_truth_label,
-    gate_summary,
-)
+from ..logic import (availability_state_text, availability_summary, condition_truth_label, gate_summary)
 from ..models import (
     Condition,
     Edge,
@@ -52,12 +45,7 @@ from ..models import (
     TaskState,
 )
 from ..service import EFOSService, WorkspaceView
-from .dialogs import (
-    AvailabilityDialog,
-    RecurrenceDialog,
-    ScheduleConflictDialog,
-    confirm_dialog,
-)
+from .dialogs import (AvailabilityDialog, RecurrenceDialog, ScheduleConflictDialog, confirm_dialog)
 from .icons import icon
 from .theme import c, rgba, state_color
 from .widgets import Badge, Divider, GreenCheckBox, IconButton, SectionLabel
@@ -71,8 +59,7 @@ def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
             widget.hide()
             widget.setParent(None)
             widget.deleteLater()
-        elif child is not None:
-            _clear_layout(child)
+        elif child is not None: _clear_layout(child)
 
 class NoteEdit(QPlainTextEdit):
     focus_lost = pyqtSignal()
@@ -115,15 +102,23 @@ class InspectorPanel(QFrame):
         outer.setSpacing(0)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        # The inspector owns vertical scrolling only. A long dependency title
+        # must never create a horizontal scrollbar or push the Attach button
+        # outside the panel, so horizontal scrolling is disabled entirely and
+        # the inner host is allowed to shrink to the viewport width.
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         outer.addWidget(self.scroll)
         self.host = QWidget()
+        self.host.setMinimumWidth(0)
+        self.host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.content = QVBoxLayout(self.host)
         self.content.setContentsMargins(18, 16, 18, 18)
         self.content.setSpacing(12)
-        # The inspector scrolls vertically. Keep every row and button at its
-        # minimum legible height instead of compressing the whole column when a
-        # Task has many sections (Status, Availability, Schedule, Recurrence…).
-        self.content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        # The default constraint lets the host shrink horizontally while the
+        # layout's minimum height still drives the vertical scrollbar.
+        self.content.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
         self.scroll.setWidget(self.host)
         self.setMinimumWidth(300)
         self.setMaximumWidth(420)
@@ -143,16 +138,13 @@ class InspectorPanel(QFrame):
         title = QLabel("No record selected")
         title.setProperty("role", "h2")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setMinimumWidth(0)
         self.content.addWidget(title)
-        hint = QLabel(
-            "Select a task, project, or condition to inspect and edit its metadata."
-        )
+        hint = _wrap_label(QLabel("Select a task, project, or condition to inspect and edit its metadata."))
         hint.setProperty("role", "muted")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setWordWrap(True)
         self.content.addWidget(hint)
-        if self.docs:
-            self._render_docs()
+        if self.docs: self._render_docs()
         self.content.addStretch(1)
 
     def set_ref(self, ref: NodeRef | None, view: WorkspaceView | None = None) -> None:
@@ -165,11 +157,9 @@ class InspectorPanel(QFrame):
             if self._note_edit is not None and self._note_edit.hasFocus():
                 self.view = view
                 return
-        if self.ref != ref:
-            self.commit_note()
+        if self.ref != ref: self.commit_note()
         self.ref = ref
-        if view is not None:
-            self.view = view
+        if view is not None: self.view = view
         self.render()
 
     def set_view(self, view: WorkspaceView, ref: NodeRef | None = None) -> None:
@@ -177,26 +167,19 @@ class InspectorPanel(QFrame):
             self.set_ref(ref, view)
             return
         self.view = view
-        if self._note_edit is not None and self._note_edit.hasFocus():
-            return
-        if self._note_dirty:
-            self.commit_note(announce=False)
-        if self.name_edit is not None and self.name_edit.hasFocus():
-            return
-        if self.ref is None:
-            self._empty()
-        else:
-            self.render()
+        if self._note_edit is not None and self._note_edit.hasFocus(): return
+        if self._note_dirty: self.commit_note(announce=False)
+        if self.name_edit is not None and self.name_edit.hasFocus(): return
+        if self.ref is None: self._empty()
+        else: self.render()
 
     # ------------------------------------------------------------------ notes
     def has_pending_note(self) -> bool:
         return bool(self._note_dirty and self._note_edit is not None)
 
     def commit_note(self, *, announce: bool = True) -> bool:
-        if self.ref is None or self._note_edit is None:
-            return True
-        if not self._note_dirty:
-            return True
+        if self.ref is None or self._note_edit is None: return True
+        if not self._note_dirty: return True
         text = self._note_edit.toPlainText()
         if not text.strip():
             # Empty edits never erase historical content. Restore the saved block.
@@ -205,13 +188,9 @@ class InspectorPanel(QFrame):
             self._loading = False
             self._note_dirty = False
             if announce:
-                self.toast_requested.emit(
-                    "Empty note edits are not saved. Use the trash icon to delete.",
-                    "info",
-                )
+                self.toast_requested.emit("Empty note edits are not saved. Use the trash icon to delete.", "info")
             return True
-        try:
-            saved = self.service.save_note(self.ref, text)
+        try: saved = self.service.save_note(self.ref, text)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return False
@@ -223,18 +202,12 @@ class InspectorPanel(QFrame):
         return True
 
     def _note_changed(self) -> None:
-        if not self._loading:
-            self._note_dirty = True
+        if not self._loading: self._note_dirty = True
 
     def _delete_note(self) -> None:
-        if self.ref is None:
-            return
-        if not confirm_dialog(
-            self, "Delete note?", "The saved note content will be removed permanently."
-        ):
-            return
-        try:
-            self.service.delete_note(self.ref)
+        if self.ref is None: return
+        if not confirm_dialog(self, "Delete note?", "The saved note content will be removed permanently."): return
+        try: self.service.delete_note(self.ref)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -251,29 +224,24 @@ class InspectorPanel(QFrame):
         if self.ref is None or self.view is None:
             self._empty()
             return
-        if self._note_edit is not None and self._note_edit.hasFocus():
-            return
-        if self._note_dirty:
-            self.commit_note(announce=False)
+        if self._note_edit is not None and self._note_edit.hasFocus(): return
+        if self._note_dirty: self.commit_note(announce=False)
         self._loading = True
         try:
             _clear_layout(self.content)
             self.name_edit = None
             self._note_edit = None
             self._note_dirty = False
-            if self.ref.kind is NodeKind.TASK:
-                self._render_task()
-            elif self.ref.kind is NodeKind.PROJECT:
-                self._render_project()
-            else:
-                self._render_condition()
+            if self.ref.kind is NodeKind.TASK: self._render_task()
+            elif self.ref.kind is NodeKind.PROJECT: self._render_project()
+            else: self._render_condition()
             self._render_dependencies()
             self._render_notes()
-            if self.docs:
-                self._render_docs()
+            if self.docs: self._render_docs()
+            # Destructive actions always live at the very bottom, below NOTE.
+            self._render_delete_for_ref()
             self.content.addStretch(1)
-        finally:
-            self._loading = False
+        finally: self._loading = False
 
     # ------------------------------------------------------------------ header
     def _header(self, title: str, kind_text: str, state: str | None, tone: str) -> QWidget:
@@ -293,15 +261,34 @@ class InspectorPanel(QFrame):
             close.clicked.connect(self.closed)
             top.addWidget(close)
         layout.addLayout(top)
+        self.name_label = _wrap_label(QLabel(title))
+        self.name_label.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        self.name_label.setToolTip("Click to rename")
+        self.name_label.setStyleSheet(
+            f"QLabel {{ background: transparent; border: 1px solid transparent; border-radius: 6px; "
+            f"color: {c('text')}; font-size: 17px; font-weight: 650; padding: 3px 4px; }}"
+            f"QLabel:hover {{ border-color: {c('border')}; }}"
+        )
         self.name_edit = QLineEdit(title)
         self.name_edit.setStyleSheet(
-            f"QLineEdit {{ background: transparent; border: 1px solid transparent; "
+            f"QLineEdit {{ background: {c('input')}; border: 1px solid {c('accent')}; "
             f"color: {c('text')}; font-size: 17px; font-weight: 650; padding: 3px 4px; }}"
-            f"QLineEdit:hover {{ border-color: {c('border')}; }}"
-            f"QLineEdit:focus {{ border-color: {c('accent')}; background: {c('input')}; }}"
         )
+        self.name_edit.hide()
+
+        def _start_rename(event) -> None:  # type: ignore[no-untyped-def]
+            if self.name_edit is not None:
+                self.name_label.hide()
+                self.name_edit.show()
+                self.name_edit.setFocus()
+                self.name_edit.selectAll()
+            event.accept()
+
+        self.name_label.mousePressEvent = _start_rename  # type: ignore[method-assign]
         self.name_edit.editingFinished.connect(self._rename)
+        layout.addWidget(self.name_label)
         layout.addWidget(self.name_edit)
+
         if state is not None:
             row = QHBoxLayout()
             row.setSpacing(6)
@@ -312,12 +299,13 @@ class InspectorPanel(QFrame):
         return frame
 
     def _rename(self) -> None:
-        if self.ref is None or self.view is None or not hasattr(self, "name_edit"):
-            return
+        if self.ref is None or self.view is None or self.name_edit is None: return
         name = self.name_edit.text().strip()
         current = self.view.snapshot.get_name(self.ref)
-        if name == current:
-            return
+        if self.name_edit is not None and self.name_edit.isVisible():
+            self.name_edit.hide()
+            self.name_label.show()
+        if name == current: return
         if not name:
             self.name_edit.setText(current)
             self.toast_requested.emit("Name cannot be empty.", "error")
@@ -326,18 +314,11 @@ class InspectorPanel(QFrame):
         try:
             if self.ref.kind is NodeKind.TASK:
                 task = self.view.snapshot.tasks[self.ref.id]
-                self.service.update_task(
-                    self.ref.id, name=name, is_recurring=task.is_recurring
-                )
-            elif self.ref.kind is NodeKind.PROJECT:
-                self.service.update_project(self.ref.id, name=name)
+                self.service.update_task(self.ref.id, name=name, is_recurring=task.is_recurring)
+            elif self.ref.kind is NodeKind.PROJECT: self.service.update_project(self.ref.id, name=name)
             else:
                 condition = self.view.snapshot.conditions[self.ref.id]
-                self.service.update_condition(
-                    self.ref.id,
-                    display_name=name,
-                    evaluation_state=condition.evaluation_state,
-                )
+                self.service.update_condition(self.ref.id, display_name=name, evaluation_state=condition.evaluation_state)
         except EFOSError as exc:
             self.name_edit.setText(current)
             self.toast_requested.emit(str(exc), "error")
@@ -351,14 +332,7 @@ class InspectorPanel(QFrame):
         if task is None:
             self._empty()
             return
-        self.content.addWidget(
-            self._header(
-                task.name,
-                "TASK",
-                task.current_state.value,
-                task.current_state.value,
-            )
-        )
+        self.content.addWidget(self._header(task.name, "TASK", task.current_state.value, task.current_state.value))
 
         status = self.view.evaluation.task_status(task.id)
         if task.current_state is TaskState.BLOCKED:
@@ -371,10 +345,8 @@ class InspectorPanel(QFrame):
                 msg = "Blocked · " + "; ".join(status.blockers[:3])
                 if len(status.blockers) > 3:
                     msg += f"; and {len(status.blockers) - 3} more"
-            else:
-                msg = "Blocked · an unsatisfied dependency prevents Ready Status."
-            lock = QLabel(msg)
-            lock.setWordWrap(True)
+            else: msg = "Blocked · an unsatisfied dependency prevents Ready Status."
+            lock = _wrap_label(QLabel(msg))
             lock.setStyleSheet(
                 f"color: {c('amber')}; background: {rgba('amber', 0.07)}; "
                 f"border: 1px solid {rgba('amber', 0.22)}; border-radius: 8px; "
@@ -388,19 +360,16 @@ class InspectorPanel(QFrame):
                 f"{availability_summary(task.availability)} · "
                 f"{availability_state_text(task.availability, now)}"
             )
-        else:
-            availability_line = "24/7 — always available"
+        else: availability_line = "24/7 — always available"
         meta = [
             ("Status", task.current_state.label),
             ("Availability", availability_line),
             ("Schedule", schedule_span(task)),
             ("Recurrence", recurrence_span(task)),
             ("Requirements", gate_summary(self.view.snapshot, self.view.evaluation, self.ref)),
-            ("Previous", task.previous_state.label if task.previous_state else "—"),
             ("Created", fmt_relative(task.created_at)),
         ]
-        for key, value in meta:
-            self.content.addWidget(_kv(key, value))
+        for key, value in meta: self.content.addWidget(_kv(key, value))
 
         if task.current_state.is_active:
             availability_row = QHBoxLayout()
@@ -438,7 +407,6 @@ class InspectorPanel(QFrame):
             self._render_schedule(task)
         else:
             self._render_recurrence(task)
-        self._render_delete("task", task.name)
 
     def _render_recurrence_controls(self, task: Task) -> None:
         self.content.addSpacing(4)
@@ -472,8 +440,9 @@ class InspectorPanel(QFrame):
         )
         row.addWidget(edit)
         self.content.addLayout(row)
-        summary = QLabel(task.recurrence.summary() if task.recurrence else "Not recurring")
-        summary.setWordWrap(True)
+        summary = _wrap_label(
+            QLabel(task.recurrence.summary() if task.recurrence else "Not recurring")
+        )
         summary.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
         self.content.addWidget(summary)
 
@@ -602,11 +571,12 @@ class InspectorPanel(QFrame):
         row.addWidget(clear)
         row.addStretch(1)
         self.content.addLayout(row)
-        hint = QLabel(
-            "Collisions with local tasks and the synchronized Google cache are checked "
-            "before saving; Force Save preserves the local block."
+        hint = _wrap_label(
+            QLabel(
+                "Collisions with local tasks and the synchronized Google cache are "
+                "checked before saving; Force Save preserves the local block."
+            )
         )
-        hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
         self.content.addWidget(hint)
 
@@ -692,12 +662,14 @@ class InspectorPanel(QFrame):
                 project.current_state.value,
             )
         )
-        if project.resolution_conditions_unknown:
-            banner = QLabel(
-                "Requirements Undefined — automated resolution is blocked until a valid "
-                "precondition or prerequisite is attached."
+        undefined = project.resolution_conditions_unknown
+        if undefined:
+            banner = _wrap_label(
+                QLabel(
+                    "Requirements Undefined — automated resolution is blocked until a "
+                    "valid precondition or prerequisite is attached."
+                )
             )
-            banner.setWordWrap(True)
             banner.setStyleSheet(
                 f"color: {c('amber')}; background: {rgba('amber', 0.07)}; "
                 f"border: 1px solid {rgba('amber', 0.24)}; border-radius: 8px; "
@@ -705,11 +677,12 @@ class InspectorPanel(QFrame):
             )
             self.content.addWidget(banner)
         else:
-            defined = QLabel(
-                "Requirements defined · automated resolution evaluates the conjunctive "
-                "dependency gate."
+            defined = _wrap_label(
+                QLabel(
+                    "Requirements defined · automated resolution evaluates the "
+                    "conjunctive dependency gate."
+                )
             )
-            defined.setWordWrap(True)
             defined.setStyleSheet(
                 f"color: {c('green')}; background: {rgba('green', 0.06)}; "
                 f"border: 1px solid {rgba('green', 0.20)}; border-radius: 8px; "
@@ -718,11 +691,18 @@ class InspectorPanel(QFrame):
             self.content.addWidget(defined)
 
         status = self.view.evaluation.project_status(project.id)
+        # An undefined Project has no dependency gate to summarize. Showing the
+        # generic "satisfied by default" line would contradict the amber banner.
+        requirements = (
+            "Undefined · dependency required"
+            if undefined
+            else gate_summary(self.view.snapshot, self.view.evaluation, self.ref)
+        )
+        satisfied = "—" if undefined else f"{status.satisfied} of {status.total}"
         meta = [
             ("Status", project.current_state.label),
-            ("Previous", project.previous_state.label if project.previous_state else "—"),
-            ("Requirements", gate_summary(self.view.snapshot, self.view.evaluation, self.ref)),
-            ("Satisfied", f"{status.satisfied} of {status.total}"),
+            ("Requirements", requirements),
+            ("Satisfied", satisfied),
             ("Created", fmt_relative(project.created_at)),
         ]
         for key, value in meta:
@@ -745,7 +725,6 @@ class InspectorPanel(QFrame):
             actions.addWidget(activate)
         actions.addStretch(1)
         self.content.addLayout(actions)
-        self._render_delete("project", project.name)
 
     def _shelve(self, project_id: str) -> None:
         self.commit_note()
@@ -826,7 +805,12 @@ class InspectorPanel(QFrame):
                 row_layout = QHBoxLayout(row_frame)
                 row_layout.setContentsMargins(0, 2, 0, 2)
                 row_layout.setSpacing(6)
-                name = QLabel(f"{target.kind.label} · {truncate(self.view.snapshot.get_name(target), 28)}")
+                name = _wrap_label(
+                    QLabel(
+                        f"{target.kind.label} · "
+                        f"{truncate(self.view.snapshot.get_name(target), 28)}"
+                    )
+                )
                 name.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
                 row_layout.addWidget(name, 1)
                 remove = IconButton("close", "Detach precondition", size=12)
@@ -836,7 +820,6 @@ class InspectorPanel(QFrame):
                 )
                 row_layout.addWidget(remove)
                 self.content.addWidget(row_frame)
-        self._render_delete("condition", condition.display_name)
 
     def _set_condition(self, condition_id: str, value: bool | None) -> None:
         try:
@@ -859,10 +842,19 @@ class InspectorPanel(QFrame):
         else:
             project = snapshot.projects.get(self.ref.id)
             editable = bool(project and project.current_state is not ProjectState.RESOLVED)
+
+        undefined_project = False
+        if self.ref.kind is NodeKind.PROJECT:
+            project = snapshot.projects.get(self.ref.id)
+            undefined_project = bool(project and project.resolution_conditions_unknown)
+
+        count = snapshot.dependency_count(self.ref)
+        # An undefined Project has no dependency definition at all. A plain em
+        # dash matches the "Satisfied: —" metadata row above; the ∅ glyph
+        # renders as a missing-glyph box in Segoe UI's uppercase SectionLabel.
+        header_count = "\u2014" if undefined_project else str(count)
         self.content.addWidget(Divider())
-        self.content.addWidget(
-            SectionLabel(f"Dependencies · {snapshot.dependency_count(self.ref)}")
-        )
+        self.content.addWidget(SectionLabel(f"Dependencies · {header_count}"))
         if not editable:
             self.content.addWidget(
                 _empty_line(
@@ -877,122 +869,168 @@ class InspectorPanel(QFrame):
             if cid in snapshot.conditions
             else cid,
         )
-        self.content.addWidget(_sub_label("PRECONDITIONS · 3VL EXTERNAL FACTS"))
-        if not preconditions:
-            self.content.addWidget(_empty_line("No preconditions attached."))
-        for condition_id in preconditions:
-            condition = snapshot.conditions.get(condition_id)
-            if condition is None:
-                continue
-            status = evaluation.for_ref(self.ref)
-            value = status.precondition_values.get(condition_id) if status else None
-            row = QFrame()
-            layout = QHBoxLayout(row)
-            layout.setContentsMargins(0, 2, 0, 2)
-            layout.setSpacing(6)
-            badge = Badge(
-                condition_truth_label(value),
-                "true" if value is True else ("false" if value is False else "unknown"),
-            )
-            badge.setMinimumWidth(62)
-            layout.addWidget(badge)
-            name = QLabel(truncate(condition.display_name, 28))
-            name.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
-            layout.addWidget(name, 1)
-            if editable:
-                remove = IconButton("close", "Detach precondition", size=12)
-                remove.setFixedSize(24, 24)
-                remove.clicked.connect(
-                    lambda _=False, cid=condition_id: self._remove_precondition(self.ref, cid)
-                )
-                layout.addWidget(remove)
-            self.content.addWidget(row)
-
-        ready = [
-            condition
-            for condition in snapshot.conditions.values()
-            if condition.id not in preconditions
-        ]
-        if editable and ready:
-            combo = QComboBox()
-            for condition in sorted(
-                ready, key=lambda item: item.display_name.casefold()
-            ):
-                combo.addItem(condition.display_name, condition.id)
-            add_row = QHBoxLayout()
-            add_row.setSpacing(6)
-            add_row.addWidget(combo, 1)
-            add = QPushButton("Attach")
-            add.clicked.connect(
-                lambda _=False, cb=combo: self._add_precondition(cb.currentData())
-            )
-            add_row.addWidget(add)
-            self.content.addLayout(add_row)
-
         prerequisites = sorted(
-            snapshot.prerequisites_for(self.ref), key=lambda ref: ref.key
+            snapshot.prerequisites_for(self.ref),
+            key=lambda source: (
+                source.kind.value,
+                snapshot.get_name(source).casefold(),
+            ),
         )
-        self.content.addWidget(_sub_label("PREREQUISITES · 2VL INTERNAL STATES"))
-        if not prerequisites:
-            self.content.addWidget(_empty_line("No prerequisites attached."))
-        for source in prerequisites:
-            status = evaluation.for_ref(self.ref)
-            value = status.prerequisite_values.get(source) if status else False
-            row = QFrame()
-            layout = QHBoxLayout(row)
-            layout.setContentsMargins(0, 2, 0, 2)
-            layout.setSpacing(6)
-            badge = Badge(
-                "TRUE" if value else "FALSE", "true" if value else "false"
-            )
-            badge.setMinimumWidth(52)
-            layout.addWidget(badge)
-            text = QLabel(
-                f"{source.kind.label} · {truncate(snapshot.get_name(source), 24)}"
-            )
-            text.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
-            text.setToolTip(f"Current state: {snapshot.get_state(source)}")
-            layout.addWidget(text, 1)
-            if editable:
-                remove = IconButton("close", "Detach prerequisite", size=12)
-                remove.setFixedSize(24, 24)
-                remove.clicked.connect(
-                    lambda _=False, src=source: self._remove_prerequisite(self.ref, src)
-                )
-                layout.addWidget(remove)
-            self.content.addWidget(row)
 
-        candidates = [
-            ref
-            for ref in snapshot.all_refs()
-            if ref.kind is not NodeKind.CONDITION and ref != self.ref
-        ]
-        if editable and candidates:
-            combo = QComboBox()
-            for ref in sorted(
-                candidates, key=lambda item: (item.kind.value, snapshot.get_name(item).casefold())
-            ):
-                combo.addItem(
-                    f"{ref.kind.label} · {snapshot.get_name(ref)}", ref.key
+        # Sub-headers only exist when their group actually has attached items.
+        if preconditions:
+            self.content.addWidget(_sub_label("PRECONDITIONS · 3VL EXTERNAL FACTS"))
+            for condition_id in preconditions:
+                condition = snapshot.conditions.get(condition_id)
+                if condition is None:
+                    continue
+                status = evaluation.for_ref(self.ref)
+                value = status.precondition_values.get(condition_id) if status else None
+                row = QFrame()
+                layout = QHBoxLayout(row)
+                layout.setContentsMargins(0, 2, 0, 2)
+                layout.setSpacing(6)
+                badge = Badge(
+                    condition_truth_label(value),
+                    "true" if value is True else ("false" if value is False else "unknown"),
                 )
-            add_row = QHBoxLayout()
-            add_row.setSpacing(6)
-            add_row.addWidget(combo, 1)
-            add = QPushButton("Attach")
-            add.clicked.connect(
-                lambda _=False, cb=combo: self._add_prerequisite(cb.currentData())
-            )
-            add_row.addWidget(add)
-            self.content.addLayout(add_row)
+                badge.setMinimumWidth(62)
+                layout.addWidget(badge)
+                name = _wrap_label(QLabel(truncate(condition.display_name, 28)))
+                name.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+                layout.addWidget(name, 1)
+                if editable:
+                    remove = IconButton("close", "Detach precondition", size=12)
+                    remove.setFixedSize(24, 24)
+                    remove.clicked.connect(
+                        lambda _=False, cid=condition_id: self._remove_precondition(
+                            self.ref, cid
+                        )
+                    )
+                    layout.addWidget(remove)
+                self.content.addWidget(row)
+
+        if prerequisites:
+            self.content.addWidget(_sub_label("PREREQUISITES · 2VL INTERNAL STATES"))
+            for source in prerequisites:
+                status = evaluation.for_ref(self.ref)
+                value = status.prerequisite_values.get(source) if status else False
+                row = QFrame()
+                layout = QHBoxLayout(row)
+                layout.setContentsMargins(0, 2, 0, 2)
+                layout.setSpacing(6)
+                badge = Badge("TRUE" if value else "FALSE", "true" if value else "false")
+                badge.setMinimumWidth(52)
+                layout.addWidget(badge)
+                text = _wrap_label(
+                    QLabel(
+                        f"{source.kind.label} · "
+                        f"{truncate(snapshot.get_name(source), 24)}"
+                    )
+                )
+                text.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+                text.setToolTip(f"Current state: {snapshot.get_state(source)}")
+                layout.addWidget(text, 1)
+                if editable:
+                    remove = IconButton("close", "Detach prerequisite", size=12)
+                    remove.setFixedSize(24, 24)
+                    remove.clicked.connect(
+                        lambda _=False, src=source: self._remove_prerequisite(
+                            self.ref, src
+                        )
+                    )
+                    layout.addWidget(remove)
+                self.content.addWidget(row)
+
+        if editable:
+            candidates: list[tuple[str, tuple[str, str]]] = []
+            for condition in sorted(
+                snapshot.conditions.values(),
+                key=lambda item: item.display_name.casefold(),
+            ):
+                if condition.id in preconditions:
+                    continue
+                candidates.append(
+                    (
+                        f"Condition · {condition.display_name}",
+                        ("precondition", condition.id),
+                    )
+                )
+            for ref in sorted(
+                (
+                    ref
+                    for ref in snapshot.all_refs()
+                    if ref.kind is not NodeKind.CONDITION and ref != self.ref
+                ),
+                key=lambda item: (
+                    item.kind.value,
+                    snapshot.get_name(item).casefold(),
+                ),
+            ):
+                if ref in prerequisites:
+                    continue
+                candidates.append(
+                    (
+                        f"{ref.kind.label} · {snapshot.get_name(ref)}",
+                        ("prerequisite", ref.key),
+                    )
+                )
+
+            if count == 0:
+                self.content.addWidget(
+                    _empty_line(
+                        "No dependencies attached · choose a Condition (precondition) "
+                        "or a Task/Project (prerequisite)."
+                    )
+                )
+            if candidates:
+                combo = QComboBox()
+                # Long candidate titles must never widen the Inspector. The
+                # combo shrinks to the available row width and elides instead.
+                combo.setSizeAdjustPolicy(
+                    QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+                )
+                combo.setMinimumContentsLength(14)
+                combo.setMinimumWidth(0)
+                combo.setSizePolicy(
+                    QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+                )
+                combo.setMaxVisibleItems(12)
+                for label, payload in candidates:
+                    combo.addItem(label, payload)
+                combo.view().setMinimumWidth(0)
+                combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
+                combo.setToolTip(
+                    "Attach a Condition as a 3VL precondition, or a Task/Project as "
+                    "a 2VL prerequisite."
+                )
+                add_row = QHBoxLayout()
+                add_row.setSpacing(6)
+                add_row.addWidget(combo, 1)
+                add = QPushButton("Attach")
+                add.setToolTip("Attach the selected dependency to this record")
+                add.clicked.connect(
+                    lambda _=False, cb=combo: self._attach_from_combo(cb.currentData())
+                )
+                add_row.addWidget(add, 0)
+                self.content.addLayout(add_row)
 
         status = evaluation.for_ref(self.ref)
         if status and status.blockers:
             self.content.addWidget(_sub_label("UNRESOLVED BARRIERS"))
             for blocker in status.blockers[:6]:
-                line = QLabel(f"• {blocker}")
-                line.setWordWrap(True)
+                line = _wrap_label(QLabel(f"• {blocker}"))
                 line.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
                 self.content.addWidget(line)
+
+    def _attach_from_combo(self, payload: tuple[str, str] | None) -> None:
+        if not payload or self.ref is None:
+            return
+        kind, value = payload
+        if kind == "precondition":
+            self._add_precondition(value)
+        else:
+            self._add_prerequisite(value)
 
     def _add_precondition(self, condition_id: str | None) -> None:
         if not condition_id or self.ref is None:
@@ -1069,40 +1107,55 @@ class InspectorPanel(QFrame):
     def _render_docs(self) -> None:
         self.content.addWidget(Divider())
         self.content.addWidget(SectionLabel("Dependency model"))
-        model = QLabel(
-            "Dependencies are flat and conjunctive. A Precondition is an external "
-            "three-valued fact. A Prerequisite is an internal entity state: a source "
-            "Task must be completed, or a source Project resolved. Every attached "
-            "dependency must pass; no manual status override exists."
+        model = _wrap_label(
+            QLabel(
+                "Dependencies are flat and conjunctive. A Precondition is an external "
+                "three-valued fact. A Prerequisite is an internal entity state: a source "
+                "Task must be completed, or a source Project resolved. Every attached "
+                "dependency must pass; no manual status override exists."
+            )
         )
-        model.setWordWrap(True)
         model.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
         self.content.addWidget(model)
         self.content.addWidget(SectionLabel("Canvas gestures"))
-        guide = QLabel(
-            "1. Draw a Precondition: drag a Condition node to a Task or Project "
-            "target; this inserts a public.task_preconditions or "
-            "public.project_preconditions row.\n"
-            "2. Draw a Prerequisite: drag a Task or Project node to a downstream "
-            "Task or Project target; this inserts a public.task_prerequisites or "
-            "public.project_prerequisites row.\n"
-            "3. Directionality: every arrow is an operational execution path. A "
-            "source node contributes directly to a target node's status or "
-            "resolution. Lines never represent parent-child or organizational "
-            "membership."
+        guide = _wrap_label(
+            QLabel(
+                "1. Draw a Precondition: drag a Condition node to a Task or Project "
+                "target; this inserts a public.task_preconditions or "
+                "public.project_preconditions row.\n"
+                "2. Draw a Prerequisite: drag a Task or Project node to a downstream "
+                "Task or Project target; this inserts a public.task_prerequisites or "
+                "public.project_prerequisites row.\n"
+                "3. Directionality: every arrow is an operational execution path. A "
+                "source node contributes directly to a target node's status or "
+                "resolution. Lines never represent parent-child or organizational "
+                "membership."
+            )
         )
-        guide.setWordWrap(True)
-        guide.setStyleSheet(f"color: {c('muted')}; font-size: 10px; line-height: 1.4;")
+        guide.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
         self.content.addWidget(guide)
-        gestures = QLabel(
-            "Wheel: zoom · Middle-drag: pan · Double-click an edge or press Delete: "
-            "remove a dependency · Drag from the right-hand port to connect."
+        gestures = _wrap_label(
+            QLabel(
+                "Wheel: zoom · Middle-drag: pan · Double-click an edge or press Delete: "
+                "remove a dependency · Drag from the right-hand port to connect."
+            )
         )
-        gestures.setWordWrap(True)
         gestures.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
         self.content.addWidget(gestures)
 
     # ---------------------------------------------------------------- delete
+    def _render_delete_for_ref(self) -> None:
+        """Render the destructive action at the very bottom of the inspector."""
+        if self.ref is None or self.view is None:
+            return
+        name = self.view.snapshot.get_name(self.ref)
+        noun = {
+            NodeKind.TASK: "task",
+            NodeKind.PROJECT: "project",
+            NodeKind.CONDITION: "condition",
+        }.get(self.ref.kind, "record")
+        self._render_delete(noun, name)
+
     def _render_delete(self, noun: str, name: str) -> None:
         self.content.addSpacing(4)
         delete = QPushButton(f"Delete {noun}")
@@ -1135,6 +1188,13 @@ class InspectorPanel(QFrame):
         self._empty()
         self.mutated.emit(f"{noun.title()} deleted")
 
+def _wrap_label(label: QLabel) -> QLabel:
+    """Make a long label wrap to the real Inspector width instead of expanding it."""
+    label.setWordWrap(True)
+    label.setMinimumWidth(0)
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    return label
+
 def _kv(key: str, value: str) -> QWidget:
     holder = QWidget()
     layout = QHBoxLayout(holder)
@@ -1142,9 +1202,9 @@ def _kv(key: str, value: str) -> QWidget:
     layout.setSpacing(10)
     label = QLabel(key)
     label.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
-    label.setMinimumWidth(92)
-    text = QLabel(value)
-    text.setWordWrap(True)
+    label.setMinimumWidth(88)
+    label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+    text = _wrap_label(QLabel(value))
     text.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
     text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     layout.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
@@ -1171,6 +1231,6 @@ def _sub_label(text: str) -> QLabel:
     return label
 
 def _empty_line(text: str) -> QLabel:
-    label = QLabel(text)
+    label = _wrap_label(QLabel(text))
     label.setStyleSheet(f"color: {c('faint')}; font-size: 10px; font-style: italic;")
     return label

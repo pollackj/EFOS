@@ -12,8 +12,8 @@ is required at runtime.
 ## What is included
 
 - **Native desktop shell** — frameless PyQt6 window with a thin theme-aware outer
-  outline, dark first-run default, complete light theme, and locally persisted
-  appearance.
+  outline, dark first-run default, a Dark / Graphite / Slate appearance choice
+  drawn from the six-stop dark-to-slate palette, and locally persisted settings.
 - **Suggested Focus** — a four-tier recommendation cascade over live database
   state: Ready Task, critical milestone, stalled Project, revisit candidate.
   Clicking it opens the shared metadata inspector without changing any data.
@@ -127,7 +127,7 @@ main.py
    ├─ workers.py          QThread workers for network/probe calls
    ├─ sql/schema.sql      canonical schema executed on first launch
    └─ ui/
-      ├─ theme.py         dark/light palettes, QSS, native chrome
+      ├─ theme.py         six-stop dark/slate palettes, QSS, native chrome
       ├─ graph.py         flat dependency canvas
       ├─ flow_page.py     canvas workspace
       ├─ inspector.py     shared metadata inspector and gesture guide
@@ -312,8 +312,10 @@ The suite creates and drops disposable PostgreSQL databases (`efos_test_*`,
 - calendar cache collisions, stale-state warning, timezone mapping
 - typed registry sorting, autocomplete selection, Suggested Focus navigation,
   notes context interception, assistant priority routing, four calendar views,
-  the availability dialog and Status/Availability separation, and theme
-  persistence
+  the availability dialog and Status/Availability separation, the three-choice
+  appearance and 300/360/420 px Inspector-width presets, unified two-pane page
+  geometry, assistant bottom-scroll, calendar time-grid padding, and Google
+  OAuth failure/timeout recovery
 
 ## Security
 

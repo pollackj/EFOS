@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
-    QSplitter,
     QStackedLayout,
     QTableWidget,
     QTableWidgetItem,
@@ -37,7 +36,13 @@ from .dialogs import confirm_dialog
 from .icons import icon
 from .inspector import InspectorPanel
 from .theme import c, rgba
-from .widgets import EmptyState, SegmentedControl
+from .widgets import (
+    EmptyState,
+    InspectorSplitter,
+    SegmentedControl,
+    page_margins,
+    toolbar_row,
+)
 
 
 TASK_HEADERS = ["TASK", "STATUS", "CONDITIONS", "RECURRING", "CREATED"]
@@ -71,11 +76,10 @@ class RegistryPage(QWidget):
         self._selected_ref: NodeRef | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 16, 24, 18)
+        page_margins(root)
         root.setSpacing(12)
 
-        top = QHBoxLayout()
-        top.setSpacing(9)
+        self.toolbar, top = toolbar_row()
         self.segments = SegmentedControl(["All", "Tasks", "Projects", "Conditions"])
         self.segments.select(1, emit=False)
         self.segments.changed.connect(self._change_filter)
@@ -99,10 +103,11 @@ class RegistryPage(QWidget):
             lambda: self.create_requested.emit(self.kind or NodeKind.TASK)
         )
         top.addWidget(self.new_button)
-        root.addLayout(top)
+        root.addWidget(self.toolbar)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        splitter = InspectorSplitter()
+        # The shared 20 px gutter separates the sortable table from the
+        # Inspector on every workspace page.
         table_shell = QWidget()
         table_layout = QVBoxLayout(table_shell)
         table_layout.setContentsMargins(0, 0, 0, 0)
@@ -192,6 +197,7 @@ class RegistryPage(QWidget):
         splitter.setSizes([880, 350])
         splitter.setStretchFactor(0, 1)
         root.addWidget(splitter, 1)
+        self.splitter = splitter
 
         self.completer = QCompleter(self)
         self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)

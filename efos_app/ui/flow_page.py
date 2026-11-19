@@ -1,25 +1,19 @@
 """Flow workspace: the flat dependency canvas plus the shared inspector."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from ..errors import EFOSError
-from ..models import NodeKind, NodeRef
+from ..models import NodeRef
 from ..service import EFOSService, WorkspaceView
 from .graph import FlowScene, FlowView, LayoutStore
-from .icons import icon
 from .inspector import InspectorPanel
-from .theme import c
-from .widgets import IconButton, InlineBanner
+from .widgets import InlineBanner, InspectorSplitter
 
 
 class FlowWorkspace(QWidget):
@@ -32,53 +26,20 @@ class FlowWorkspace(QWidget):
         self.service = service
         self.view: WorkspaceView | None = None
         self._known_keys: frozenset[str] = frozenset()
+        self._startup_layout_pending = True
+        self._startup_auto_layout = True
+        # The Dashboard page owns the single compact toolbar (Manage | Flow,
+        # canvas tools, create actions) and this page fills the stack directly,
+        # so the canvas and Inspector start at the same Y as every other page.
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 16, 24, 20)
-        root.setSpacing(12)
-
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(7)
-        text_col = QVBoxLayout()
-        text_col.setSpacing(1)
-        title = QLabel("Dependency canvas")
-        title.setProperty("role", "h2")
-        text_col.addWidget(title)
-        subtitle = QLabel("Flat nodes · Condition → entity = Precondition · entity → entity = Prerequisite")
-        subtitle.setProperty("role", "faint")
-        text_col.addWidget(subtitle)
-        toolbar.addLayout(text_col, 1)
-        self.layout_button = IconButton("layout", "Auto layout")
-        self.layout_button.clicked.connect(self._auto_layout)
-        toolbar.addWidget(self.layout_button)
-        self.fit_button = IconButton("fit", "Fit to content")
-        self.fit_button.clicked.connect(lambda: self.viewport.fit_content())
-        toolbar.addWidget(self.fit_button)
-        self.zoom_out_button = IconButton("zoom_out", "Zoom out")
-        self.zoom_out_button.clicked.connect(lambda: self.viewport.zoom_out())
-        toolbar.addWidget(self.zoom_out_button)
-        self.zoom_in_button = IconButton("zoom_in", "Zoom in")
-        self.zoom_in_button.clicked.connect(lambda: self.viewport.zoom_in())
-        toolbar.addWidget(self.zoom_in_button)
-        new_task = QPushButton("Task")
-        new_task.setIcon(icon("task", c("muted"), 14))
-        new_task.clicked.connect(lambda: self.create_requested.emit(NodeKind.TASK))
-        toolbar.addWidget(new_task)
-        new_project = QPushButton("Project")
-        new_project.setIcon(icon("project", c("muted"), 14))
-        new_project.clicked.connect(lambda: self.create_requested.emit(NodeKind.PROJECT))
-        toolbar.addWidget(new_project)
-        new_condition = QPushButton("Condition")
-        new_condition.setIcon(icon("condition", c("muted"), 14))
-        new_condition.clicked.connect(lambda: self.create_requested.emit(NodeKind.CONDITION))
-        toolbar.addWidget(new_condition)
-        root.addLayout(toolbar)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
 
         self.banner = InlineBanner()
         self.banner.dismissed.connect(lambda: None)
         root.addWidget(self.banner)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        splitter = InspectorSplitter()
         canvas_shell = QFrame()
         canvas_shell.setObjectName("GraphCanvasShell")
         canvas_layout = QVBoxLayout(canvas_shell)
@@ -95,6 +56,7 @@ class FlowWorkspace(QWidget):
         splitter.setSizes([900, 340])
         splitter.setStretchFactor(0, 1)
         root.addWidget(splitter, 1)
+        self.splitter = splitter
 
         self.scene.selection_changed.connect(self._selection_changed)
         self.scene.connect_requested.connect(self._connect)
@@ -105,6 +67,25 @@ class FlowWorkspace(QWidget):
         self.scene.layout_changed.connect(self._banner_hint)
 
     # ---------------------------------------------------------------- public
+    def set_startup_auto_layout(self, enabled: bool) -> None:
+        """Configure whether the first Flow visit after launch auto-lays out."""
+        self._startup_auto_layout = bool(enabled)
+
+    @property
+    def startup_layout_pending(self) -> bool:
+        return self._startup_layout_pending
+
+    def set_startup_layout_pending(self, pending: bool) -> None:
+        self._startup_layout_pending = bool(pending)
+
+    def maybe_startup_layout(self) -> None:
+        """Apply the startup auto-layout once, when Flow is first opened."""
+        if not self._startup_layout_pending:
+            return
+        self._startup_layout_pending = False
+        if self._startup_auto_layout and self.scene.node_items:
+            self._auto_layout()
+
     def refresh(self, view: WorkspaceView) -> None:
         self.view = view
         self.scene.load_view(view)
@@ -179,6 +160,10 @@ class FlowWorkspace(QWidget):
         from ..logic import condition_truth_label
 
         self.mutated.emit(f"Condition set to {condition_truth_label(value)}")
+
+    def auto_layout(self) -> None:
+        """Re-run the deterministic left-to-right canvas layout."""
+        self._auto_layout()
 
     def _auto_layout(self) -> None:
         self.scene.auto_layout()

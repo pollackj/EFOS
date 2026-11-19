@@ -21,12 +21,86 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from .icons import brand_pixmap, dotted_line_pixmap, icon
 from .theme import c, display_font, rgba, ui_font
+
+# ---------------------------------------------------------------------------
+# Unified two-pane page shell geometry
+# ---------------------------------------------------------------------------
+# Dashboard (Manage + Flow), Registry, and Assistant all share one shell: an
+# identical 24 px outer page pad, one compact toolbar row of the same height,
+# and a 20 px QSplitter gutter between the main pane and the Inspector/Query
+# pane. Keeping the numbers here makes the four surfaces provably identical.
+PAGE_MARGIN = 24
+PANE_GUTTER = 20
+TOOLBAR_HEIGHT = 40
+
+
+def page_margins(layout) -> None:  # type: ignore[no-untyped-def]
+    """Apply the shared 24 px page padding to an outer page layout."""
+    layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+
+
+def toolbar_row() -> tuple[QWidget, QHBoxLayout]:
+    """Create the shared compact toolbar row that precedes every pane splitter."""
+    holder = QWidget()
+    holder.setFixedHeight(TOOLBAR_HEIGHT)
+    layout = QHBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    return holder, layout
+
+
+def configure_pane_splitter(splitter) -> None:  # type: ignore[no-untyped-def]
+    """Apply the shared 20 px gutter and non-collapsible panes."""
+    splitter.setChildrenCollapsible(False)
+    splitter.setHandleWidth(PANE_GUTTER)
+
+
+class InspectorSplitter(QSplitter):
+    """Two-pane splitter that keeps the Inspector/Query pane at a fixed width.
+
+    The persisted 300–420 px width is stored on the splitter, so a page that is
+    created hidden still opens with the right pane size the first time it is
+    shown, and window resizes grow the main pane instead of the Inspector. A
+    user drag updates the width through the main window's ``splitterMoved``
+    handler, which calls :meth:`set_pane_width` again.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        configure_pane_splitter(self)
+        self._pane_width: int | None = None
+
+    def set_pane_width(self, width: int) -> None:
+        self._pane_width = max(1, int(width))
+        self._apply_pane_width()
+
+    def pane_width(self) -> int | None:
+        return self._pane_width
+
+    def _apply_pane_width(self) -> None:
+        if self._pane_width is None:
+            return
+        # QSplitter sizes exclude the handle, so subtract the 20 px gutter to
+        # land the Inspector/Query pane on the exact requested pixel width.
+        available = self.width() - self.handleWidth()
+        if available <= self._pane_width + 1:
+            return
+        self.setSizes([max(1, available - self._pane_width), self._pane_width])
+
+    def resizeEvent(self, event):  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        self._apply_pane_width()
+
+    def showEvent(self, event):  # type: ignore[no-untyped-def]
+        super().showEvent(event)
+        self._apply_pane_width()
 
 class Card(QFrame):
     clicked = pyqtSignal()
@@ -104,16 +178,24 @@ class IconButton(QPushButton):
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
 class NavButton(QPushButton):
-    def __init__(self, text: str, icon_name: str, parent: QWidget | None = None):
+    def __init__(
+        self,
+        text: str,
+        icon_name: str,
+        parent: QWidget | None = None,
+        *,
+        checkable: bool = True,
+    ):
         super().__init__(text, parent)
         self._icon_name = icon_name
         self.setProperty("nav", True)
-        self.setCheckable(True)
+        self.setCheckable(checkable)
         self.setIcon(icon(icon_name, c("muted"), 18))
         self.setIconSize(QSize(18, 18))
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setMinimumHeight(39)
-        self.toggled.connect(self._sync_icon)
+        if checkable:
+            self.toggled.connect(self._sync_icon)
 
     def _sync_icon(self, checked: bool) -> None:
         self.setIcon(icon(self._icon_name, c("accent") if checked else c("muted"), 18))
@@ -571,22 +653,41 @@ class SuggestedFocusCard(QFrame):
         super().mouseReleaseEvent(event)
 
 class GreenCheckBox(QCheckBox):
-    """Checkbox that paints a crisp green checkmark on Windows and macOS."""
+    """Checkbox that paints a crisp green checkmark on Windows and macOS.
 
-    def __init__(self, text: str = "", parent: QWidget | None = None):
+    ``centered=True`` paints the indicator horizontally centered inside the
+    widget instead of at its left edge. The Settings appearance/width presets
+    use it for their label-less option squares, which gives the whole column
+    width a comfortable click target.
+    """
+
+    def __init__(
+        self,
+        text: str = "",
+        parent: QWidget | None = None,
+        *,
+        centered: bool = False,
+    ):
         super().__init__(text, parent)
+        self._centered = bool(centered)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setStyleSheet(
             f"QCheckBox {{ color: {c('text_soft')}; font-size: 11px; spacing: 8px; }}"
             "QCheckBox::indicator { width: 16px; height: 16px; background: transparent; border: none; }"
         )
 
+    def hitButton(self, pos) -> bool:  # type: ignore[override]
+        # The indicator is compact, but the Settings preset columns rely on the
+        # whole centered square (and its surrounding width) being clickable.
+        return self.rect().contains(pos)
+
     def paintEvent(self, event):  # type: ignore[no-untyped-def]
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         y = (self.height() - 16) / 2.0
-        box = QRectF(0.5, y + 0.5, 15.0, 15.0)
+        x = (self.width() - 16) / 2.0 if self._centered else 0.0
+        box = QRectF(x + 0.5, y + 0.5, 15.0, 15.0)
         if self.isChecked():
             painter.setPen(QPen(QColor(c("green")), 1.4))
             painter.setBrush(QColor(rgba("green", 0.16)))
@@ -595,8 +696,12 @@ class GreenCheckBox(QCheckBox):
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
-            painter.drawLine(4, int(y + 8), 7, int(y + 11))
-            painter.drawLine(7, int(y + 11), 12, int(y + 5))
+            painter.drawLine(
+                int(x + 3.5), int(y + 8), int(x + 6.5), int(y + 11)
+            )
+            painter.drawLine(
+                int(x + 6.5), int(y + 11), int(x + 11.5), int(y + 5)
+            )
         else:
             painter.setPen(QPen(QColor(c("border_hi")), 1.2))
             painter.setBrush(QColor(c("input")))

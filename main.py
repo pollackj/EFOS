@@ -28,6 +28,7 @@ from efos_app.config import (
     ConfigurationError,
     app_data_dir,
     load_ui_state,
+    save_ui_state,
 )
 from efos_app.db import Database
 from efos_app.errors import (
@@ -44,7 +45,11 @@ from efos_app.ui.dialogs import (
 from efos_app.ui.graph import LayoutStore
 from efos_app.ui.icons import brand_pixmap
 from efos_app.ui.main_window import MainWindow
-from efos_app.ui.theme import DEFAULT_THEME, apply_theme
+from efos_app.ui.theme import (
+    apply_theme,
+    migrate_persisted_appearance,
+    preset_name,
+)
 
 log = logging.getLogger("efos")
 
@@ -242,8 +247,19 @@ def main() -> int:
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName(ORG_NAME)
     app.setWindowIcon(QIcon(brand_pixmap(256)))
-    saved_theme = str(load_ui_state().get("theme", DEFAULT_THEME))
-    apply_theme(app, saved_theme)
+    ui_state = load_ui_state()
+    # Migrate any legacy persisted appearance (0–100 slider values, notched
+    # stops, or old names such as ``light``) onto Dark / Graphite / Slate and
+    # rewrite ui_state.json so the migration happens exactly once.
+    theme_value = migrate_persisted_appearance(ui_state)
+    apply_theme(app, value=theme_value)
+    if (
+        ui_state.get("theme_value") != theme_value
+        or ui_state.get("theme") != preset_name(theme_value)
+    ):
+        save_ui_state(
+            {"theme": preset_name(theme_value), "theme_value": theme_value}
+        )
     _install_exception_hook()
 
     config = _load_config_with_setup()

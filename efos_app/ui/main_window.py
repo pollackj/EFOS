@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -40,15 +41,13 @@ from .graph import LayoutStore
 from .icons import brand_pixmap, icon
 from .registry_page import RegistryPage
 from .theme import (
-    DEFAULT_THEME,
-    THEME_DARK,
-    THEME_LIGHT,
     apply_theme,
     c,
     current_theme,
+    current_theme_value,
     enable_native_title_bar,
-    rgba,
-    set_theme,
+    migrate_persisted_appearance,
+    set_theme_value as apply_theme_value,
 )
 from .widgets import (
     Badge,
@@ -58,6 +57,7 @@ from .widgets import (
     SuggestedFocusCard,
     Toast,
 )
+
 
 PAGE_META = [
     ("OVERVIEW", "Workspace snapshot", "Your current endeavors at a glance"),
@@ -100,19 +100,6 @@ class TitleBar(QFrame):
         product.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(product)
         layout.addStretch(1)
-        self.theme_button = QPushButton()
-        self.theme_button.setProperty("variant", "icon")
-        self.theme_button.setFixedSize(30, 26)
-        self.theme_button.setIcon(
-            icon("sun" if current_theme() == THEME_DARK else "moon", c("muted"), 14)
-        )
-        self.theme_button.setToolTip(
-            "Switch to light theme"
-            if current_theme() == THEME_DARK
-            else "Switch to dark theme"
-        )
-        self.theme_button.clicked.connect(owner.toggle_theme)
-        layout.addWidget(self.theme_button)
         self.min_button = self._control("—", "Minimize")
         self.max_button = self._control("□", "Maximize")
         self.close_button = self._control("✕", "Close", close=True)
@@ -192,16 +179,27 @@ class MainWindow(QMainWindow):
         self._db_connected: bool | None = None
         self._probe_worker: ConnectionProbeWorker | None = None
         self.ui_state = load_ui_state()
-        saved_theme = str(self.ui_state.get("theme", DEFAULT_THEME))
-        set_theme(saved_theme)
+        # Legacy theme values migrate onto Dark / Graphite / Slate here too, so
+        # a window constructed without main.py still lands on a curated stop.
+        self._theme_value = apply_theme_value(
+            migrate_persisted_appearance(self.ui_state)
+        )
+        self._landing_view = str(self.ui_state.get("landing_view", "Dashboard"))
+        self._flow_auto_layout = bool(self.ui_state.get("flow_auto_layout", True))
+        self._inspector_width = self._clamp_inspector_width(
+            self.ui_state.get("inspector_width", 360)
+        )
+        self._settings_dialog = None
+        self._applying_width = False
         app = QApplication.instance()
         if app is not None:
-            apply_theme(app, saved_theme)
+            apply_theme(app, value=self._theme_value)
         self._build_window()
         self._build_shortcuts()
         self._restore_window_state()
         self.toast = Toast(self)
         self.refresh_all(initial=True)
+        QTimer.singleShot(0, self._apply_landing_view)
         self.scheduler = BackgroundScheduler(service, parent=self)
         self.scheduler.pulse_completed.connect(self._pulse_completed)
         self.scheduler.pulse_failed.connect(
@@ -222,16 +220,6 @@ class MainWindow(QMainWindow):
         self._initial_sync_timer.setSingleShot(True)
         self._initial_sync_timer.timeout.connect(self._periodic_sync)
         self._initial_sync_timer.start(4000)
-        # Target the main window container wrapper and its immediate borders to prevent layout masking
-        self.setStyleSheet("""
-            QMainWindow {
-                border: 1px solid #3a3b3c;
-            }
-            #central_widget, QFrame#main_container, .MainWindowClass {
-                border: 1px solid #3a3b3c;
-                border-radius: 4px;
-            }
-        """ + self.styleSheet())
 
     # ------------------------------------------------------------------ window
     def _restore_window_state(self) -> None:
@@ -254,7 +242,10 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.resize(1500, 950)
         self.setMinimumSize(1180, 760)
-        self.setStyleSheet(f"QMainWindow {{ background: {c('bg')}; }}")
+        self.setStyleSheet(
+            f"QMainWindow {{ background: {c('bg')}; "
+            f"border: 1px solid {c('border_hi')}; }}"
+        )
 
         # 1. Initialize the core PyQt interface panel widget
         central = QWidget()
@@ -267,16 +258,18 @@ class MainWindow(QMainWindow):
         # 2. Build the top-level outer border frame layer
         border_frame = QFrame()
         border_frame.setObjectName("GlobalBorderChassis")
-        border_frame.setStyleSheet("""
-            #GlobalBorderChassis {
-                border: 1px solid #3a3b3c;
+        border_frame.setStyleSheet(
+            f"""
+            #GlobalBorderChassis {{
+                border: 1px solid {c('border_hi')};
                 border-radius: 4px;
-                background-color: #1a1b1c;
-            }
-            QWidget#Root {
+                background-color: {c('bg')};
+            }}
+            QWidget#Root {{
                 border-radius: 3px;
-            }
-        """)
+            }}
+            """
+        )
         
         # 3. Securely pack the core app layout inside the border envelope
         frame_layout = QVBoxLayout(border_frame)
@@ -375,6 +368,9 @@ class MainWindow(QMainWindow):
         self.calendar.open_node.connect(self.open_node)
         self.calendar.toast_requested.connect(self.show_toast)
         self.chat.toast_requested.connect(self.show_toast)
+        self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
+        self._restore_inspector_widths()
+        self._wire_inspector_splitters()
         if self.stack.currentIndex() < 0 or self.stack.currentIndex() >= len(self.pages):
             self.set_page(0)
 
@@ -414,12 +410,15 @@ class MainWindow(QMainWindow):
         self.focus_card.clicked.connect(self.open_recommendation)
         layout.addWidget(self.focus_card)
         layout.addStretch(1)
-        version = QLabel(f"EFOS {APP_VERSION} · explicit dependency model")
-        version.setStyleSheet(
-            f"color: {c('faint')}; font-size: 8px; letter-spacing: 0.3px;"
+        # Settings mirrors the workspace NavButton geometry and styling so it
+        # shares the exact left gutter, icon size, weight, and hover state.
+        self.settings_button = NavButton("Settings", "settings", checkable=False)
+        self.settings_button.setToolTip(
+            "Open settings · appearance (Dark/Graphite/Slate), default landing "
+            "view, Flow auto-layout, Inspector width"
         )
-        version.setWordWrap(True)
-        layout.addWidget(version)
+        self.settings_button.clicked.connect(self.open_settings)
+        layout.addWidget(self.settings_button)
         return sidebar
 
     def _header(self) -> QWidget:
@@ -494,15 +493,31 @@ class MainWindow(QMainWindow):
         self.footer_counts.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
         layout.addWidget(self.footer_counts)
         layout.addStretch(1)
-        self.footer_status = QLabel("Scheduler · 60s pulse · schema verified")
-        self.footer_status.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
-        layout.addWidget(self.footer_status)
+        self.footer_version = QLabel(
+            f"EFOS {APP_VERSION} · explicit dependency model"
+        )
+        self.footer_version.setStyleSheet(
+            f"color: {c('faint')}; font-size: 9px; letter-spacing: 0.3px;"
+        )
+        self.footer_version.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         guard = QLabel("READ-ONLY SQL GUARD")
         guard.setStyleSheet(
             f"color: {c('accent')}; font-size: 8px; font-weight: 700; "
             "letter-spacing: 0.8px;"
         )
-        layout.addWidget(guard)
+        # The two right-hand labels live in their own row with explicit
+        # spacing, so they keep a clean gutter instead of touching or clipping
+        # as the window narrows.
+        guard.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        right_meta = QWidget()
+        right_meta_layout = QHBoxLayout(right_meta)
+        right_meta_layout.setContentsMargins(0, 0, 0, 0)
+        right_meta_layout.setSpacing(14)
+        right_meta_layout.addWidget(self.footer_version, 0)
+        right_meta_layout.addWidget(guard, 0)
+        layout.addWidget(right_meta, 0)
         return bar
 
     def _build_shortcuts(self) -> None:
@@ -516,6 +531,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(
             lambda: (self.set_page(3), self.chat.composer.setFocus())
         )
+        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(self.open_settings)
 
     def _tick_clock(self) -> None:
         now = datetime.now()
@@ -571,10 +587,6 @@ class MainWindow(QMainWindow):
         self.db_meta.setStyleSheet(
             f"color: {c('muted') if status.connected else c('red')}; font-size: 9px;"
         )
-        if status.connected:
-            self.footer_status.setText("Scheduler · 60s pulse · schema verified")
-        else:
-            self.footer_status.setText("Database connection lost · cached view retained")
         if self._db_connected is True and not status.connected:
             self.show_toast("PostgreSQL disconnected. Showing the last cached view.", "error")
         self._db_connected = status.connected
@@ -613,14 +625,7 @@ class MainWindow(QMainWindow):
         fired = [item for item in results if item[2] == "reset"]
         blocked = [item for item in results if item[2] == "blocked by dependencies"]
         if not results and not changes:
-            self.footer_status.setText(
-                f"Scheduler pulse · {timestamp.strftime('%H:%M:%S')} · stable"
-            )
             return
-        self.footer_status.setText(
-            f"Scheduler pulse · {timestamp.strftime('%H:%M:%S')} · "
-            f"{len(fired)} reset · {len(changes)} transition"
-        )
         if fired:
             self.refresh_all(
                 message=f"Recurrence reset · {', '.join(item[1] for item in fired)}"
@@ -756,7 +761,7 @@ class MainWindow(QMainWindow):
         self.toast.notify(message, level)
 
     # ------------------------------------------------------------------ theme
-    def toggle_theme(self) -> None:
+    def _theme_change_blocked(self) -> bool:
         chat_worker = getattr(self.chat, "_worker", None)
         sync_worker = getattr(self.calendar, "_sync_worker", None)
         connect_worker = getattr(self.calendar, "_connect_worker", None)
@@ -769,30 +774,46 @@ class MainWindow(QMainWindow):
                 "switching themes.",
                 "info",
             )
-            return
+            return True
+        return False
+
+    def change_theme_value(self, value: int, *, rebuild: bool = True) -> bool:
+        """Apply a curated Dark/Graphite/Slate appearance and rebuild the UI.
+
+        Legacy 0–100 values and retired stop values are migrated by
+        ``set_theme_value`` onto the nearest of stops 0, 2, and 4.
+        """
+        if self._theme_change_blocked():
+            return False
         if not self.flush_notes():
-            return
-        target = THEME_LIGHT if current_theme() == THEME_DARK else THEME_DARK
+            return False
         index = self.stack.currentIndex()
         selected = self.dashboard.selected_ref
         manage_tab = self.dashboard.stack.currentIndex()
         thread = self.chat.thread_id
         calendar_mode = self.calendar.mode
         calendar_anchor = self.calendar.anchor
-        save_ui_state({"theme": target})
+        flow_pending = self.dashboard.flow.startup_layout_pending
+        self._remember_inspector_width()
+        value = apply_theme_value(value)
+        self._theme_value = value
+        # Persist the numeric stop and its nearest theme name together.
+        save_ui_state({"theme": current_theme(), "theme_value": value})
         self.ui_state = load_ui_state()
-        set_theme(target)
         app = QApplication.instance()
         if app is not None:
-            apply_theme(app, target)
-        self._rebuild_interface(
-            index=index,
-            selected=selected,
-            manage_tab=manage_tab,
-            thread=thread,
-            calendar_mode=calendar_mode,
-            calendar_anchor=calendar_anchor,
-        )
+            apply_theme(app, value=value)
+        if rebuild:
+            self._rebuild_interface(
+                index=index,
+                selected=selected,
+                manage_tab=manage_tab,
+                thread=thread,
+                calendar_mode=calendar_mode,
+                calendar_anchor=calendar_anchor,
+                flow_pending=flow_pending,
+            )
+        return True
 
     def _rebuild_interface(
         self,
@@ -803,7 +824,9 @@ class MainWindow(QMainWindow):
         thread: str | None,
         calendar_mode: str,
         calendar_anchor: datetime,
+        flow_pending: bool = True,
     ) -> None:
+        previous_size = self.size()
         old_central = self.takeCentralWidget()
         if hasattr(self, "_clock_timer") and self._clock_timer is not None:
             self._clock_timer.stop()
@@ -816,7 +839,10 @@ class MainWindow(QMainWindow):
         if old_central is not None:
             old_central.deleteLater()
         self._build_window()
+        self.resize(previous_size)
         self.title_bar.sync_state()
+        self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
+        self.dashboard.flow.set_startup_layout_pending(flow_pending)
         self._position_resize_handles()
         if hasattr(self, "toast") and self.toast is not None:
             self.toast.deleteLater()
@@ -842,6 +868,152 @@ class MainWindow(QMainWindow):
         self.set_page(min(index, len(self.pages) - 1))
         self.calendar.reload()
         QTimer.singleShot(30, lambda: enable_native_title_bar(self))
+
+    # --------------------------------------------------------------- settings
+    def open_settings(self) -> None:
+        """Open the local Settings dialog from the sidebar gear."""
+        from .settings_dialog import SettingsDialog
+
+        self._remember_inspector_width()
+        dialog = SettingsDialog(
+            theme_value=current_theme_value(),
+            landing_view=self._landing_view,
+            flow_auto_layout=self._flow_auto_layout,
+            inspector_width=self._inspector_width,
+            parent=self,
+        )
+        dialog.theme_value_changed.connect(self._settings_theme_changed)
+        dialog.landing_view_changed.connect(self._settings_landing_changed)
+        dialog.flow_auto_layout_changed.connect(self._settings_flow_changed)
+        dialog.inspector_width_changed.connect(self._settings_width_changed)
+        self._settings_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._settings_dialog = None
+
+    def _settings_theme_changed(self, value: int) -> None:
+        if self.change_theme_value(value):
+            dialog = self._settings_dialog
+            if dialog is not None:
+                dialog.raise_()
+                dialog.activateWindow()
+
+    def _settings_landing_changed(self, value: str) -> None:
+        self._landing_view = str(value)
+        save_ui_state({"landing_view": self._landing_view})
+        self.ui_state = load_ui_state()
+
+    def _settings_flow_changed(self, enabled: bool) -> None:
+        self._flow_auto_layout = bool(enabled)
+        save_ui_state({"flow_auto_layout": self._flow_auto_layout})
+        self.ui_state = load_ui_state()
+        if hasattr(self, "dashboard"):
+            self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
+
+    def _settings_width_changed(self, width: int) -> None:
+        self._inspector_width = self._clamp_inspector_width(width)
+        self._apply_inspector_width(self._inspector_width)
+        save_ui_state({"inspector_width": self._inspector_width})
+        self.ui_state = load_ui_state()
+
+    # ---------------------------------------------------------------- landing
+    def _apply_landing_view(self) -> None:
+        """Route to the configured default landing view after startup refresh."""
+        target = self._landing_view
+        if target == "Overview":
+            self.set_page(0)
+        elif target == "Flow":
+            self.set_page(1)
+            self.dashboard.show_flow()
+        elif target == "Calendar":
+            self.set_page(4)
+        elif target == "Assistant":
+            self.set_page(3)
+        elif target in ("Projects", "Tasks"):
+            self.set_page(1)
+            self.dashboard.show_manage()
+            QTimer.singleShot(
+                0, lambda name=target: self.dashboard.focus_group(name)
+            )
+        else:
+            self.set_page(1)
+            self.dashboard.show_manage()
+
+    # -------------------------------------------------------- inspector width
+    @staticmethod
+    def _clamp_inspector_width(value) -> int:  # type: ignore[no-untyped-def]
+        try:
+            width = int(value)
+        except (TypeError, ValueError):
+            width = 360
+        return max(300, min(420, width))
+
+    def _inspector_splitters(self) -> list:
+        splitters = []
+        dashboard = getattr(self, "dashboard", None)
+        if dashboard is not None:
+            splitters.append(getattr(dashboard, "splitter", None))
+            splitters.append(getattr(getattr(dashboard, "flow", None), "splitter", None))
+        registry = getattr(self, "registry", None)
+        splitters.append(getattr(registry, "splitter", None))
+        # Assistant's right-hand "Query the workspace" pane is the fourth
+        # Inspector-width surface and must follow the same 300–420 px preset.
+        chat = getattr(self, "chat", None)
+        splitters.append(getattr(chat, "splitter", None))
+        return [splitter for splitter in splitters if splitter is not None]
+
+    def _apply_inspector_width(self, width: int) -> None:
+        if self._applying_width:
+            return
+        self._applying_width = True
+        try:
+            width = self._clamp_inspector_width(width)
+            for splitter in self._inspector_splitters():
+                setter = getattr(splitter, "set_pane_width", None)
+                if callable(setter):
+                    # InspectorSplitter remembers the width and re-applies it
+                    # when a hidden page is first shown or the window resizes.
+                    setter(width)
+                    continue
+                # ``sizes()`` already excludes the handle, so it is the pane
+                # space available for the requested width.
+                total = sum(splitter.sizes())
+                if total <= 0:
+                    total = max(1, splitter.width() - splitter.handleWidth())
+                splitter.setSizes([max(1, total - width), width])
+        finally:
+            self._applying_width = False
+
+    def _restore_inspector_widths(self) -> None:
+        self._apply_inspector_width(self._inspector_width)
+
+    def _remember_inspector_width(self) -> None:
+        splitters = self._inspector_splitters()
+        if not splitters:
+            return
+        visible = [splitter for splitter in splitters if splitter.isVisible()]
+        if not visible:
+            # No workspace pane is on screen (for example the Overview page).
+            # Keep the persisted width rather than reading a placeholder size.
+            return
+        chosen = visible[0]
+        sizes = chosen.sizes()
+        if len(sizes) >= 2 and sizes[1] > 0:
+            self._inspector_width = self._clamp_inspector_width(sizes[1])
+            # Propagate a drag to every page so the Inspector/Query pane keeps
+            # the same width when the user switches workspaces.
+            self._apply_inspector_width(self._inspector_width)
+
+    def _wire_inspector_splitters(self) -> None:
+        for splitter in self._inspector_splitters():
+            try:
+                splitter.splitterMoved.disconnect()
+            except TypeError:
+                pass
+            splitter.splitterMoved.connect(
+                lambda *_args: self._remember_inspector_width()
+            )
 
     # ----------------------------------------------------------------- events
     def _position_resize_handles(self) -> None:
@@ -921,9 +1093,14 @@ class MainWindow(QMainWindow):
             probe.wait(1500)
         if hasattr(self, "scheduler"):
             self.scheduler.stop()
+        self._remember_inspector_width()
         save_ui_state(
             {
                 "theme": current_theme(),
+                "theme_value": current_theme_value(),
+                "landing_view": self._landing_view,
+                "flow_auto_layout": self._flow_auto_layout,
+                "inspector_width": self._inspector_width,
                 "geometry": bytes(self.saveGeometry().toBase64()).decode(),
                 "window_state": bytes(self.saveState().toBase64()).decode(),
             }

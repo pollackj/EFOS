@@ -1,7 +1,7 @@
-"""RAG Assistant: permanent two-column conversation and query launchpad."""
+"""RAG Assistant: two-pane conversation and query launchpad with a shared shell."""
 from __future__ import annotations
 from datetime import datetime
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -25,7 +24,15 @@ from ..service import EFOSService, WorkspaceView
 from .dialogs import CustomQueryDialog, confirm_dialog
 from .icons import icon
 from .theme import c, rgba
-from .widgets import Badge, Divider, IconButton, SectionLabel
+from .widgets import (
+    Badge,
+    Divider,
+    IconButton,
+    InspectorSplitter,
+    SectionLabel,
+    page_margins,
+    toolbar_row,
+)
 from ..workers import ChatWorker
 
 DEFAULT_PRESETS = [
@@ -75,35 +82,57 @@ class ChatPage(QWidget):
         self.cached_queries: list = []
         self._user_bubbles: list[tuple[QFrame, QLabel, str]] = []
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        # Assistant uses the same shell as Dashboard and Registry: 24 px page
+        # padding, one compact toolbar row, then a 20 px-gutter two-pane
+        # splitter. The right "Query the workspace" pane is the fourth
+        # Inspector-width surface (300–420 px) and shares the rounded card
+        # styling instead of bleeding into the window edge.
+        root = QVBoxLayout(self)
+        page_margins(root)
+        root.setSpacing(12)
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(24, 14, 18, 16)
-        left_layout.setSpacing(10)
-        left_layout.addLayout(self._thread_bar())
+        self.toolbar, toolbar_layout = toolbar_row()
+        toolbar_layout.addLayout(self._thread_bar(), 1)
+        root.addWidget(self.toolbar)
+
+        splitter = InspectorSplitter()
+        splitter.addWidget(self._chat_card())
+        splitter.addWidget(self._launchpad())
+        splitter.setSizes([900, 360])
+        splitter.setStretchFactor(0, 1)
+        root.addWidget(splitter, 1)
+        self.splitter = splitter
+
+    # ------------------------------------------------------------- chat card
+    def _chat_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("AssistantChatCard")
+        card.setProperty("card", True)
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
         self.stream_scroll = QScrollArea()
         self.stream_scroll.setWidgetResizable(True)
+        self.stream_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.stream_host = QWidget()
         self.stream = QVBoxLayout(self.stream_host)
         self.stream.setContentsMargins(2, 4, 8, 4)
         self.stream.setSpacing(12)
         self.stream_scroll.setWidget(self.stream_host)
-        left_layout.addWidget(self.stream_scroll, 1)
+        layout.addWidget(self.stream_scroll, 1)
         self._render_empty_stream()
-        left_layout.addWidget(self._composer_frame())
+        layout.addWidget(self._composer_frame())
         self.disclaimer = QLabel(DISCLAIMER)
         self.disclaimer.setStyleSheet(f"color: {c('faint')}; font-size: 10px; padding: 0 4px;")
         self.disclaimer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        left_layout.addWidget(self.disclaimer)
-        root.addWidget(left, 1)
-        root.addWidget(self._launchpad())
+        layout.addWidget(self.disclaimer)
+        return card
 
     # ------------------------------------------------------------------ thread
     def _thread_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(7)
         label = QLabel("THREAD")
         label.setProperty("role", "sectionTitle")
@@ -146,14 +175,19 @@ class ChatPage(QWidget):
     # --------------------------------------------------------------- launchpad
     def _launchpad(self) -> QWidget:
         panel = QFrame()
-        panel.setObjectName("Launchpad")
+        panel.setObjectName("AssistantQueryCard")
+        panel.setProperty("card", True)
         panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        panel.setFixedWidth(378)
+        # The splitter owns the width; these bounds mirror the Inspector's
+        # 300–420 px interactive range.
+        panel.setMinimumWidth(300)
+        panel.setMaximumWidth(420)
         outer = QVBoxLayout(panel)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.launch_scroll = QScrollArea()
         self.launch_scroll.setWidgetResizable(True)
+        self.launch_scroll.setFrameShape(QFrame.Shape.NoFrame)
         outer.addWidget(self.launch_scroll)
         host = QWidget()
         layout = QVBoxLayout(host)
@@ -229,6 +263,12 @@ class ChatPage(QWidget):
         return panel
 
     # --------------------------------------------------------------- lifecycle
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        # Startup landing on Assistant (or returning to the page) must open the
+        # conversation pinned to its newest message.
+        self._schedule_scroll_to_bottom()
+
     def refresh(self, view: WorkspaceView) -> None:
         self.view = view
         self._refresh_threads()
@@ -236,10 +276,20 @@ class ChatPage(QWidget):
         self._refresh_envelope()
         if self.thread_id is None and not self.messages:
             self._render_empty_stream()
+        self._schedule_scroll_to_bottom()
 
     def shutdown(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.wait(1500)
+
+    # ------------------------------------------------------------------ scroll
+    def _scroll_to_bottom(self) -> None:
+        bar = self.stream_scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _schedule_scroll_to_bottom(self) -> None:
+        """Pin the stream to its bottom after Qt has laid the bubbles out."""
+        QTimer.singleShot(0, self._scroll_to_bottom)
 
     # ------------------------------------------------------------------ threads
     def _refresh_threads(self) -> None:
@@ -287,6 +337,7 @@ class ChatPage(QWidget):
         self.messages = messages
         if render:
             self._render_messages()
+        self._schedule_scroll_to_bottom()
 
     def _new_thread(self) -> None:
         try:
@@ -521,17 +572,10 @@ class ChatPage(QWidget):
             self.stream.addWidget(self._bubble(message))
         self.stream.addStretch(1)
         self._sync_user_bubble_widths()
-        from PyQt6.QtCore import QTimer
-
-        QTimer.singleShot(
-            0,
-            lambda: (
-                self._sync_user_bubble_widths(),
-                self.stream_scroll.verticalScrollBar().setValue(
-                    self.stream_scroll.verticalScrollBar().maximum()
-                ),
-            ),
-        )
+        # One deferred pass after layout, then a short follow-up so wrapped
+        # bubbles that grow during the first layout still land at the bottom.
+        self._schedule_scroll_to_bottom()
+        QTimer.singleShot(30, self._scroll_to_bottom)
 
     def _bubble(self, message: ChatMessage) -> QWidget:
         assistant = message.role != "user"
@@ -614,6 +658,7 @@ class ChatPage(QWidget):
         holder_layout.addWidget(frame, 0)
         holder_layout.addStretch(1)
         self.stream.insertWidget(max(0, self.stream.count() - 1), holder)
+        self._schedule_scroll_to_bottom()
         return holder
 
     # ----------------------------------------------------------- custom queries

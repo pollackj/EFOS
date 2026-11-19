@@ -10,13 +10,19 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 $env:TEMP = $tmp
 $env:TMP = $tmp
 
+# Use the project virtual environment for every Python step (tests, icon
+# generation, PyInstaller) so the packaged dependency set matches what the
+# test suite just exercised. Fall back to PATH only when .venv is absent.
+$py = Join-Path $root ".venv\Scripts\python.exe"
+if (-not (Test-Path $py)) { $py = "python" }
+
 Write-Host "== EFOS build ==" -ForegroundColor Cyan
 if (-not $SkipTests) {
     Write-Host "Running test suite..."
     $env:EFOS_APP_DATA = Join-Path $root ".efos-data"
     $env:QT_QPA_PLATFORM = "offscreen"
     $env:QT_QPA_FONTDIR = "C:\Windows\Fonts"
-    python -m pytest -q --disable-warnings -p no:cacheprovider
+    & $py -m pytest -q --disable-warnings -p no:cacheprovider
     if ($LASTEXITCODE -ne 0) { throw "Tests failed; packaging stopped." }
 }
 
@@ -33,7 +39,7 @@ if (-not (Test-Path $icon)) {
     $icon = Join-Path $root "build\efos.ico"
     if (-not (Test-Path $icon)) {
         Write-Host "Generating the EFOS icon from brand artwork..."
-        python (Join-Path $root "scripts\make_icon.py") $icon
+        & $py (Join-Path $root "scripts\make_icon.py") $icon
         if ($LASTEXITCODE -ne 0) { throw "Icon generation failed." }
     }
     if (-not (Test-Path $icon)) { throw "Expected icon was not produced: $icon" }
@@ -49,6 +55,9 @@ $arguments = @(
     "--icon", $icon,
     "--version-file", (Join-Path $root "assets\version_info.txt"),
     "--add-data", "$root\efos_app\sql;efos_app\sql",
+    # Bundle certifi's CA store so HTTPS/OAuth token exchange works inside the
+    # one-file executable regardless of the host certificate store.
+    "--collect-data", "certifi",
     "--distpath", $staging,
     "--workpath", $work,
     "--specpath", $specDir,
@@ -56,7 +65,7 @@ $arguments = @(
     (Join-Path $root "main.py")
 )
 Write-Host "Packaging one-file Windows executable..."
-python @arguments
+& $py @arguments
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 
 $exe = Join-Path $staging "EFOS.exe"

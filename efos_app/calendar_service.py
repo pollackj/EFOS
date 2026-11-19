@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import logging
+import os
 import secrets
+import subprocess
+import sys
 import time
 import webbrowser
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -36,6 +41,67 @@ TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 SCOPES = ("https://www.googleapis.com/auth/calendar.readonly",)
 LOOPBACK_PORTS = (8765, 8766, 8767, 8768)
+DEFAULT_OAUTH_TIMEOUT = 90.0
+
+
+def oauth_timeout() -> float:
+    """Seconds to wait for the loopback callback (``EFOS_GOOGLE_OAUTH_TIMEOUT``)."""
+    raw = os.environ.get("EFOS_GOOGLE_OAUTH_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_OAUTH_TIMEOUT
+    return max(15.0, min(600.0, value))
+
+
+@contextmanager
+def guarded_standard_streams():
+    """Guarantee ``sys.stdout``/``sys.stderr`` exist during the OAuth hand-off.
+
+    ``pythonw`` and PyInstaller ``--windowed`` builds start with no console, so
+    both streams are ``None``. ``http.server`` writes to ``sys.stderr`` and some
+    browser launchers touch ``sys.stdout``; a ``None`` stream raises inside the
+    OAuth worker and leaves the Calendar button stuck on "Waiting for Google…".
+    Throwaway sinks are installed for the duration and the real streams are
+    restored afterwards.
+    """
+    saved_stdout, saved_stderr = sys.stdout, sys.stderr
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = saved_stdout, saved_stderr
+
+
+def open_authorization_url(url: str) -> bool:
+    """Open ``url`` in the user's default browser, with Windows fallbacks."""
+    opened = False
+    try:
+        opened = bool(webbrowser.open(url, new=1, autoraise=True))
+    except Exception:  # pragma: no cover - platform/browser specific
+        log.debug("webbrowser.open failed", exc_info=True)
+    if not opened:
+        try:
+            opened = bool(webbrowser.open_new_tab(url))
+        except Exception:  # pragma: no cover - platform/browser specific
+            log.debug("webbrowser.open_new_tab failed", exc_info=True)
+    if not opened and sys.platform == "win32":
+        try:
+            os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606
+            opened = True
+        except OSError:
+            try:
+                subprocess.Popen(  # noqa: S603,S607
+                    ["cmd", "/c", "start", "", url],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                opened = True
+            except OSError:
+                log.warning("No browser could be launched for the Google OAuth URL.")
+    return opened
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -173,6 +239,14 @@ class GoogleOAuthClient:
                 "Google OAuth client credentials are not configured. Set "
                 "EFOS_GOOGLE_CLIENT_ID and EFOS_GOOGLE_CLIENT_SECRET."
             )
+        # Mirrors InstalledAppFlow.run_local_server(open_browser=True,
+        # timeout=...): the loopback server never writes to a missing console,
+        # the authorization URL is opened explicitly with fallbacks, and the
+        # hand-off has a hard deadline instead of blocking the worker forever.
+        with guarded_standard_streams():
+            return self._run_local_server_flow()
+
+    def _run_local_server_flow(self) -> dict[str, Any]:
         server: _CallbackServer | None = None
         last_error: Exception | None = None
         port = LOOPBACK_PORTS[0]
@@ -186,27 +260,51 @@ class GoogleOAuthClient:
                 continue
         if server is None:
             raise ExternalServiceError(
-                f"Could not open the OAuth loopback listener ({last_error})."
+                f"Could not open the OAuth loopback listener ({last_error}). "
+                "Close the program holding ports 8765–8768 and try again."
             )
         url, state, verifier, redirect = self._authorization(port)
-        server.timeout = 2
-        webbrowser.open(url)
-        deadline = time.time() + 180
+        timeout = oauth_timeout()
+        log.info("Google OAuth authorization URL: %s", url)
+        if not open_authorization_url(url):
+            log.warning(
+                "The default browser did not accept the Google OAuth URL; the "
+                "user can open it manually: %s",
+                url,
+            )
+        deadline = time.time() + timeout
         try:
             while time.time() < deadline and not server.received:
-                server.handle_request()
+                # Short per-request timeout: the loop re-checks the deadline so
+                # a missing browser can never block for the full wait.
+                server.timeout = max(0.2, min(1.0, deadline - time.time()))
+                try:
+                    server.handle_request()
+                except OSError:
+                    break
         finally:
             server.server_close()
         received = server.received or {}
         if received.get("error"):
+            detail = received.get("error_description") or received["error"]
             raise ExternalServiceError(
-                f"Google authorization was denied ({received['error']})."
+                f"Google authorization was denied ({detail})."
             )
-        if received.get("state") != state:
-            raise ExternalServiceError("Google authorization state did not match.")
         code = received.get("code")
         if not code:
-            raise ExternalServiceError("Google authorization timed out before a code arrived.")
+            # No callback at all (timeout) or a callback without a code: this is
+            # the actionable path the Calendar banner surfaces.
+            raise ExternalServiceError(
+                "Google authorization timed out after "
+                f"{int(timeout)} seconds. Check your browser for the consent tab, "
+                "press Connect Google to try again, or open this URL manually: "
+                f"{url}"
+            )
+        if received.get("state") != state:
+            raise ExternalServiceError(
+                "Google authorization state did not match. Press Connect Google "
+                "to start a fresh authorization."
+            )
         tokens = self._token_request(
             {
                 "client_id": self.config.google_client_id,

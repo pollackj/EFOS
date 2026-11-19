@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -26,7 +25,19 @@ from .graph import LayoutStore
 from .icons import icon
 from .inspector import InspectorPanel
 from .theme import c, display_font, rgba, state_color
-from .widgets import (Badge, Card, ClickableRow, Divider, MetricCard, SectionHeader, SegmentedControl)
+from .widgets import (
+    Badge,
+    Card,
+    ClickableRow,
+    Divider,
+    IconButton,
+    InspectorSplitter,
+    MetricCard,
+    SectionHeader,
+    SegmentedControl,
+    page_margins,
+    toolbar_row,
+)
 
 def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
     while layout.count():
@@ -489,64 +500,34 @@ class DashboardPage(QWidget):
         self.service = service
         self.view: WorkspaceView | None = None
         self.selected_ref: NodeRef | None = None
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 16, 24, 18)
-        root.setSpacing(12)
+        self._group_widgets: dict[str, QWidget] = {}
+        self._create_buttons: list[QPushButton] = []
 
-        top = QHBoxLayout()
-        top.setSpacing(12)
-        text_col = QVBoxLayout()
-        text_col.setSpacing(2)
-        title = QLabel("Dashboard")
-        title.setProperty("role", "h2")
-        text_col.addWidget(title)
-        subtitle = QLabel("Manage metadata in place, or map dependencies on the flat canvas.")
-        subtitle.setProperty("role", "faint")
-        text_col.addWidget(subtitle)
-        # Add the text column without a stretch factor first
-        top.addLayout(text_col)
-        top.addSpacing(20)
-        self.tabs = SegmentedControl(["Manage", "Flow"])
-        # Inject standard sizing padding to scale them up beautifully
-        self.tabs.setMinimumHeight(36)
-        self.tabs.setMinimumWidth(160)
-        self.tabs.setStyleSheet("""
-            QPushButton {
-                font-size: 13px;
-                font-weight: bold;
-                padding: 6px 16px;
-            }
-        """ + self.tabs.styleSheet())
-        self.tabs.changed.connect(self._switch_tab)
-        top.addWidget(self.tabs)
-        # Finally, add an empty stretch factor at the far end to push the remaining empty space to the right
-        top.addStretch(1)
-        root.addLayout(top)
-
-        self.stack = QStackedWidget()
-        root.addWidget(self.stack, 1)
-        self.manage = self._build_manage()
+        # The Flow canvas is built first so the shared toolbar can own its
+        # Auto layout / Fit / Zoom controls instead of adding a second header
+        # row above the Flow splitter.
         self.flow = FlowWorkspace(service, layout_store)
         self.flow.create_requested.connect(self.create_requested)
         self.flow.mutated.connect(self._flow_mutated)
         self.flow.toast_requested.connect(self.toast_requested)
-        self.stack.addWidget(self.manage)
-        self.stack.addWidget(self.flow)
 
-    # ---------------------------------------------------------------- manage
-    def _build_manage(self) -> QWidget:
-        page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        left_shell = QWidget()
-        left_layout = QVBoxLayout(left_shell)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
-        actions = QHBoxLayout()
-        actions.setSpacing(7)
+        root = QVBoxLayout(self)
+        page_margins(root)
+        root.setSpacing(12)
+
+        # One compact toolbar row replaces the retired "Dashboard" heading.
+        # The window header already reads WORKSPACE / Dashboard, so the row
+        # carries only Manage | Flow, the Flow-only canvas tools, and the
+        # create actions — exactly one Registry/Assistant toolbar tall.
+        self.toolbar, toolbar_layout = toolbar_row()
+        self.tabs = SegmentedControl(["Manage", "Flow"])
+        self.tabs.setMinimumHeight(30)
+        self.tabs.setFixedWidth(168)
+        self.tabs.changed.connect(self._switch_tab)
+        toolbar_layout.addWidget(self.tabs)
+        self.flow_tools = self._flow_tools()
+        toolbar_layout.addWidget(self.flow_tools)
+        toolbar_layout.addStretch(1)
         for kind, label, icon_name in (
             (NodeKind.TASK, "New task", "task"),
             (NodeKind.PROJECT, "New project", "project"),
@@ -555,14 +536,63 @@ class DashboardPage(QWidget):
             button = QPushButton(label)
             button.setIcon(icon(icon_name, c("muted"), 14))
             button.clicked.connect(lambda _=False, k=kind: self.create_requested.emit(k))
-            actions.addWidget(button)
-        actions.addStretch(1)
-        left_layout.addLayout(actions)
+            self._create_buttons.append(button)
+            toolbar_layout.addWidget(button)
+        root.addWidget(self.toolbar)
+
+        self.stack = QStackedWidget()
+        root.addWidget(self.stack, 1)
+        self.manage = self._build_manage()
+        self.stack.addWidget(self.manage)
+        self.stack.addWidget(self.flow)
+        self._sync_toolbar()
+
+    # ---------------------------------------------------------------- toolbar
+    def _flow_tools(self) -> QWidget:
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.layout_button = IconButton("layout", "Auto layout")
+        self.layout_button.clicked.connect(lambda: self.flow.auto_layout())
+        self.fit_button = IconButton("fit", "Fit to content")
+        self.fit_button.clicked.connect(lambda: self.flow.viewport.fit_content())
+        self.zoom_out_button = IconButton("zoom_out", "Zoom out")
+        self.zoom_out_button.clicked.connect(lambda: self.flow.viewport.zoom_out())
+        self.zoom_in_button = IconButton("zoom_in", "Zoom in")
+        self.zoom_in_button.clicked.connect(lambda: self.flow.viewport.zoom_in())
+        for button in (
+            self.layout_button,
+            self.fit_button,
+            self.zoom_out_button,
+            self.zoom_in_button,
+        ):
+            layout.addWidget(button)
+        return holder
+
+    def _sync_toolbar(self) -> None:
+        """Show the Flow canvas tools only while the Flow tab is active."""
+        self.flow_tools.setVisible(self.stack.currentIndex() == 1)
+
+    # ---------------------------------------------------------------- manage
+    def _build_manage(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # The page-level toolbar above the stack already carries the create
+        # actions, so Manage starts directly with the splitter. Its left edge —
+        # and the Tasks/Projects cards inside it — align with the toolbar.
+        splitter = InspectorSplitter()
+        left_shell = QWidget()
+        left_layout = QVBoxLayout(left_shell)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         self.manage_scroll = QScrollArea()
         self.manage_scroll.setWidgetResizable(True)
+        self.manage_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.manage_host = QWidget()
         self.manage_content = QVBoxLayout(self.manage_host)
-        self.manage_content.setContentsMargins(2, 2, 8, 8)
+        self.manage_content.setContentsMargins(0, 0, 8, 4)
         self.manage_content.setSpacing(14)
         self.manage_scroll.setWidget(self.manage_host)
         left_layout.addWidget(self.manage_scroll, 1)
@@ -573,7 +603,8 @@ class DashboardPage(QWidget):
         splitter.addWidget(self.manage_inspector)
         splitter.setSizes([820, 360])
         splitter.setStretchFactor(0, 1)
-        layout.addWidget(splitter)
+        layout.addWidget(splitter, 1)
+        self.splitter = splitter
         return page
 
     def refresh(self, view: WorkspaceView) -> None:
@@ -605,8 +636,8 @@ class DashboardPage(QWidget):
         )
         projects = sorted(snapshot.projects.values(), key=lambda item: item.name.casefold())
         conditions = sorted(snapshot.conditions.values(), key=lambda item: item.display_name.casefold())
-        self.manage_content.addWidget(
-            self._group(
+        self._group_widgets = {
+            "Tasks": self._group(
                 "Tasks",
                 f"{len(active_tasks)} active · completed and deferred records live in the Registry",
                 [
@@ -620,10 +651,8 @@ class DashboardPage(QWidget):
                     for task in active_tasks
                 ],
                 empty="No active tasks.",
-            )
-        )
-        self.manage_content.addWidget(
-            self._group(
+            ),
+            "Projects": self._group(
                 "Projects",
                 f"{len(projects)} projects · stalled and shelved require explicit action",
                 [
@@ -639,10 +668,8 @@ class DashboardPage(QWidget):
                     for project in projects
                 ],
                 empty="No projects.",
-            )
-        )
-        self.manage_content.addWidget(
-            self._group(
+            ),
+            "Conditions": self._group(
                 "Conditions",
                 f"{len(conditions)} external facts · TRUE, FALSE, or UNKNOWN",
                 [
@@ -658,8 +685,10 @@ class DashboardPage(QWidget):
                     for condition in conditions
                 ],
                 empty="No conditions.",
-            )
-        )
+            ),
+        }
+        for group in self._group_widgets.values():
+            self.manage_content.addWidget(group)
         self.manage_content.addStretch(1)
 
     @staticmethod
@@ -729,14 +758,28 @@ class DashboardPage(QWidget):
         self.manage_inspector.commit_note()
         self.flow.flush_notes()
         self.stack.setCurrentIndex(index)
+        self._sync_toolbar()
+        if index == 1:
+            self.flow.maybe_startup_layout()
 
     def show_manage(self) -> None:
         self.tabs.select(0, emit=False)
         self.stack.setCurrentIndex(0)
+        self._sync_toolbar()
 
     def show_flow(self) -> None:
         self.tabs.select(1, emit=False)
         self.stack.setCurrentIndex(1)
+        self._sync_toolbar()
+        self.flow.maybe_startup_layout()
+
+    def focus_group(self, name: str) -> None:
+        """Scroll the Manage queue to a named group (Tasks/Projects/Conditions)."""
+        self.show_manage()
+        group = self._group_widgets.get(name)
+        if group is None:
+            return
+        self.manage_scroll.ensureWidgetVisible(group, 0, 0)
 
     def select_manage(self, ref: NodeRef) -> None:
         if self.view is None:

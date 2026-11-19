@@ -1,22 +1,84 @@
-"""Visual system for EFOS: dark/light palettes, QSS, and native window chrome.
+"""Visual system for EFOS: six notched dark-to-slate stops and QSS.
 
-Dark is the absolute first-run default. The active theme is persisted in the
-local UI-state JSON file by the main window and restored across restarts.
+The palette engine keeps six discrete steps:
+
+* ``0`` — Deep Dark (the absolute first-run default)
+* ``1``–``4`` — progressively lifted Charcoal, Graphite, Steel, and Slate steps
+* ``5`` — Neutral Slate, a balanced low-glare grey dark
+
+Only the two end-point palettes are authored; every interior stop is
+interpolated perceptually (OKLab) between them and the foreground tokens are
+contrast-corrected against the resulting background so text stays legible at
+*every* stop. The retired light 51–100 range no longer exists.
+
+The Settings surface exposes three curated *appearance choices* drawn from that
+spectrum — Dark (stop ``0``), Graphite (stop ``2``), and Slate (stop ``4``).
+Legacy persisted values (the 0–100 slider, the 0–5 stops, and old theme names)
+migrate onto one of those three stops through
+:func:`normalise_appearance_value`. The active stop is persisted locally by the
+main window; the PostgreSQL schema is never touched.
 """
 from __future__ import annotations
 
 import ctypes
+import math
+import re
 import sys
 
 from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import QApplication, QWidget
 
 THEME_DARK = "dark"
-THEME_LIGHT = "light"
+THEME_GRAPHITE = "graphite"
+THEME_SLATE = "slate"
 DEFAULT_THEME = THEME_DARK
 
-PALETTES: dict[str, dict[str, str]] = {
-    THEME_DARK: {
+# The Settings dialog offers three exclusive appearance choices. Each choice is
+# an existing palette stop, so the six-stop dark→slate spectrum survives intact
+# while the UI stays simple:
+#   Dark     → stop 0 (Deep Dark, the first-run default, formerly persisted 0)
+#   Graphite → stop 2 (formerly persisted 20)
+#   Slate    → stop 4 (formerly persisted 40)
+APPEARANCE_OPTIONS: tuple[tuple[str, int], ...] = (
+    ("Dark", 0),
+    ("Graphite", 2),
+    ("Slate", 4),
+)
+APPEARANCE_VALUES = tuple(value for _label, value in APPEARANCE_OPTIONS)
+APPEARANCE_LABELS = {value: label for label, value in APPEARANCE_OPTIONS}
+
+# Appearance names resolve to the curated stop. Stop 5 (Neutral Slate) and the
+# retired light range remain valid *palette* inputs but are no longer offered.
+THEME_PRESETS: dict[str, int] = {
+    THEME_DARK: 0,
+    THEME_GRAPHITE: 2,
+    THEME_SLATE: 4,
+}
+THEME_STEPS = (0, 1, 2, 3, 4, 5)
+# Backwards-compatible alias for code that iterates the stop list.
+PRESET_VALUES = THEME_STEPS
+THEME_STEP_LABELS = {
+    0: "Deep Dark",
+    1: "Charcoal",
+    2: "Graphite",
+    3: "Steel",
+    4: "Slate",
+    5: "Neutral Slate",
+}
+# Names persisted by builds that exposed the 0–100 slider. ``light`` migrates
+# onto Slate, the most lifted appearance choice available.
+LEGACY_THEME_NAMES = {
+    "light": 4,
+    "deep dark": 0,
+    "charcoal": 0,
+    "steel": 2,
+    "neutral slate": 4,
+}
+
+# Authored end-point palettes. Every stop must define the same token set; the
+# six notched stops are expanded from these two by _build_palette_stops().
+_RAW_STOPS: dict[int, dict[str, str]] = {
+    0: {
         "bg": "#090B10",
         "bg_raised": "#0D1017",
         "surface": "#11151D",
@@ -53,46 +115,59 @@ PALETTES: dict[str, dict[str, str]] = {
         "input_focus": "#0E131B",
         "shadow": "rgba(0, 0, 0, 0.55)",
     },
-    THEME_LIGHT: {
-        "bg": "#F2F5FA",
-        "bg_raised": "#E9EEF6",
-        "surface": "#FFFFFF",
-        "surface_2": "#F6F8FC",
-        "surface_3": "#EDF2F9",
-        "hover": "#E5ECF6",
-        "border": "#D5DDEA",
-        "border_hi": "#B6C3D6",
-        "outline": "#AFBCCE",
-        "text": "#17202E",
-        "text_soft": "#33415A",
-        "muted": "#5C6B82",
-        "faint": "#8493A8",
-        "accent": "#4F6BED",
-        "accent_2": "#7157D6",
-        "teal": "#0F8C80",
-        "amber": "#A96A0A",
-        "green": "#12784B",
-        "red": "#C1374A",
-        "pink": "#AB4680",
-        "blue": "#2D69C9",
-        "task": "#2D69C9",
-        "project": "#6D4BD0",
-        "condition": "#A96A0A",
-        "row_alt": "#F7F9FD",
-        "selection": "#DCE6FA",
-        "canvas": "#F8FAFE",
-        "canvas_dot": "rgba(23, 32, 46, 0.06)",
-        "canvas_dot_accent": "rgba(79, 107, 237, 0.07)",
-        "sidebar": "#EBF0F8",
-        "titlebar": "#E6ECF5",
-        "statusbar": "#EBF0F8",
-        "input": "#FFFFFF",
-        "input_focus": "#FFFFFF",
-        "shadow": "rgba(38, 54, 80, 0.14)",
+    5: {
+        "bg": "#171A1F",
+        "bg_raised": "#1C2026",
+        "surface": "#22272E",
+        "surface_2": "#282E36",
+        "surface_3": "#30373F",
+        "hover": "#363E48",
+        "border": "#353C46",
+        "border_hi": "#4B5563",
+        "outline": "#414A56",
+        "text": "#E7EAEE",
+        "text_soft": "#C2C8D0",
+        "muted": "#8C95A1",
+        "faint": "#626C78",
+        "accent": "#7C8CA3",
+        "accent_2": "#55637A",
+        "teal": "#4EC9B8",
+        "amber": "#E3AE63",
+        "green": "#62C795",
+        "red": "#E07981",
+        "pink": "#D98FB7",
+        "blue": "#7FA6E0",
+        "task": "#7FA6E0",
+        "project": "#A995E0",
+        "condition": "#E3AE63",
+        "row_alt": "#1F242B",
+        "selection": "#2F3A4A",
+        "canvas": "#15181D",
+        "canvas_dot": "rgba(255, 255, 255, 0.040)",
+        "canvas_dot_accent": "rgba(160, 180, 220, 0.060)",
+        "sidebar": "#14171C",
+        "titlebar": "#121519",
+        "statusbar": "#14171C",
+        "input": "#1A1E24",
+        "input_focus": "#1E232A",
+        "shadow": "rgba(0, 0, 0, 0.45)",
     },
 }
 
-_current = DEFAULT_THEME
+# Foreground tokens are corrected against the interpolated backgrounds. The
+# thresholds follow WCAG: body text 7:1, secondary 5:1, muted 4:1, faint 3:1.
+_CONTRAST_FLOORS = {
+    "text": 7.0,
+    "text_soft": 5.0,
+    "muted": 4.0,
+    "faint": 3.0,
+}
+_CONTRAST_BACKGROUNDS = ("bg", "surface", "input")
+_RGBA_RE = re.compile(
+    r"rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)"
+    r"(?:\s*,\s*([0-9.]+)\s*)?\)",
+    re.IGNORECASE,
+)
 
 FONT_FAMILY = "Segoe UI Variable Text"
 FONT_DISPLAY = "Segoe UI Variable Display"
@@ -111,24 +186,335 @@ STATE_COLORS = {
     "unknown": "muted",
 }
 
+_current_value = 0
+_cache: dict[int, dict[str, str]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Color maths
+# ---------------------------------------------------------------------------
+def _parse_color(value: str) -> tuple[int, int, int, int]:
+    text = str(value).strip()
+    if text.startswith("#"):
+        raw = text[1:]
+        if len(raw) == 3:
+            raw = "".join(channel * 2 for channel in raw)
+        if len(raw) == 8:
+            red, green, blue, alpha = (
+                int(raw[index : index + 2], 16) for index in (0, 2, 4, 6)
+            )
+            return red, green, blue, alpha
+        if len(raw) == 6:
+            return (
+                int(raw[0:2], 16),
+                int(raw[2:4], 16),
+                int(raw[4:6], 16),
+                255,
+            )
+    match = _RGBA_RE.match(text)
+    if match:
+        red, green, blue = (int(round(float(match.group(i)))) for i in (1, 2, 3))
+        raw_alpha = match.group(4)
+        alpha = 255 if raw_alpha is None else int(round(float(raw_alpha) * 255))
+        return (
+            max(0, min(255, red)),
+            max(0, min(255, green)),
+            max(0, min(255, blue)),
+            max(0, min(255, alpha)),
+        )
+    return 255, 255, 255, 255
+
+
+def _is_rgba(value: str) -> bool:
+    return str(value).strip().lower().startswith("rgba")
+
+
+def _format_color(rgb: tuple[float, float, float], alpha: float, *, rgba: bool) -> str:
+    red, green, blue = (max(0, min(255, int(round(channel)))) for channel in rgb)
+    if rgba or alpha < 254.5:
+        return f"rgba({red}, {green}, {blue}, {max(0.0, min(1.0, alpha / 255.0)):.3f})"
+    return f"#{red:02X}{green:02X}{blue:02X}"
+
+
+def _srgb_to_linear(channel: float) -> float:
+    value = channel / 255.0
+    if value <= 0.04045:
+        return value / 12.92
+    return ((value + 0.055) / 1.055) ** 2.4
+
+
+def _linear_to_srgb(value: float) -> float:
+    value = max(0.0, min(1.0, value))
+    if value <= 0.0031308:
+        return value * 12.92 * 255.0
+    return (1.055 * (value ** (1.0 / 2.4)) - 0.055) * 255.0
+
+
+def _rgb_to_oklab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+    red, green, blue = (_srgb_to_linear(channel) for channel in rgb)
+    l_value = 0.4122214708 * red + 0.5363325363 * green + 0.0514459929 * blue
+    m_value = 0.2119034982 * red + 0.6806995451 * green + 0.1073969566 * blue
+    s_value = 0.0883024619 * red + 0.2817188376 * green + 0.6299787005 * blue
+    l_root = math.copysign(abs(l_value) ** (1.0 / 3.0), l_value)
+    m_root = math.copysign(abs(m_value) ** (1.0 / 3.0), m_value)
+    s_root = math.copysign(abs(s_value) ** (1.0 / 3.0), s_value)
+    lightness = 0.2104542553 * l_root + 0.7936177850 * m_root - 0.0040720468 * s_root
+    a_value = 1.9779984951 * l_root - 2.4285922050 * m_root + 0.4505937099 * s_root
+    b_value = 0.0259040371 * l_root + 0.7827717662 * m_root - 0.8086757660 * s_root
+    return lightness, a_value, b_value
+
+
+def _oklab_to_rgb(lab: tuple[float, float, float]) -> tuple[float, float, float]:
+    lightness, a_value, b_value = lab
+    l_root = lightness + 0.3963377774 * a_value + 0.2158037573 * b_value
+    m_root = lightness - 0.1055613458 * a_value - 0.0638541728 * b_value
+    s_root = lightness - 0.0894841775 * a_value - 1.2914855480 * b_value
+    l_value = l_root**3
+    m_value = m_root**3
+    s_value = s_root**3
+    red = 4.0767416621 * l_value - 3.3077115913 * m_value + 0.2309699292 * s_value
+    green = -1.2684380046 * l_value + 2.6097574011 * m_value - 0.3413193965 * s_value
+    blue = -0.0041960863 * l_value - 0.7034186147 * m_value + 1.7076147010 * s_value
+    return _linear_to_srgb(red), _linear_to_srgb(green), _linear_to_srgb(blue)
+
+
+def _mix_colors(start: str, end: str, amount: float) -> str:
+    amount = max(0.0, min(1.0, amount))
+    start_rgba = _parse_color(start)
+    end_rgba = _parse_color(end)
+    lab = tuple(
+        plane[0] + (plane[1] - plane[0]) * amount
+        for plane in zip(_rgb_to_oklab(start_rgba[:3]), _rgb_to_oklab(end_rgba[:3]))
+    )
+    red, green, blue = _oklab_to_rgb(lab)  # type: ignore[arg-type]
+    alpha = start_rgba[3] + (end_rgba[3] - start_rgba[3]) * amount
+    return _format_color(
+        (red, green, blue), alpha, rgba=_is_rgba(start) or _is_rgba(end)
+    )
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    red, green, blue = (
+        _srgb_to_linear(channel) for channel in rgb[:3]
+    )
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast_ratio(first: tuple[int, int, int], second: tuple[int, int, int]) -> float:
+    high, low = sorted(
+        (_relative_luminance(first), _relative_luminance(second)), reverse=True
+    )
+    return (high + 0.05) / (low + 0.05)
+
+
+def _meets_contrast(
+    rgb: tuple[int, int, int], backgrounds: list[tuple[int, int, int]], floor: float
+) -> bool:
+    return min(_contrast_ratio(rgb, background) for background in backgrounds) >= floor
+
+
+def _ensure_contrast(
+    value: str,
+    backgrounds: list[tuple[int, int, int]],
+    floor: float,
+) -> str:
+    """Nudge a foreground color toward white/black until it meets the floor."""
+    source = _parse_color(value)
+    rgb = source[:3]
+    if _meets_contrast(rgb, backgrounds, floor):
+        return value
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+    white_score = min(_contrast_ratio(white, background) for background in backgrounds)
+    black_score = min(_contrast_ratio(black, background) for background in backgrounds)
+    target = white if white_score >= black_score else black
+    best = target
+    low, high = 0.0, 1.0
+    for _ in range(18):
+        amount = (low + high) / 2.0
+        candidate = tuple(
+            channel + (goal - channel) * amount for channel, goal in zip(rgb, target)
+        )
+        if _meets_contrast(candidate, backgrounds, floor):  # type: ignore[arg-type]
+            best = candidate
+            high = amount
+        else:
+            low = amount
+    return _format_color(
+        (best[0], best[1], best[2]), source[3], rgba=_is_rgba(value)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Palette stops
+# ---------------------------------------------------------------------------
+def _build_palette_stops() -> dict[int, dict[str, str]]:
+    """Expand the two authored end points into the six notched stops.
+
+    Stop ``n`` mixes the Deep Dark and Neutral Slate end points at ``n / 5``
+    in OKLab, then applies the same WCAG foreground correction used for the
+    former continuous slider. Stop ``n`` therefore reproduces the retired
+    value ``n * 10`` exactly.
+    """
+    low, high = _RAW_STOPS[0], _RAW_STOPS[5]
+    span = THEME_STEPS[-1] - THEME_STEPS[0]
+    stops: dict[int, dict[str, str]] = {}
+    for value in THEME_STEPS:
+        amount = (value - THEME_STEPS[0]) / span
+        if amount <= 0:
+            result = dict(low)
+        elif amount >= 1:
+            result = dict(high)
+        else:
+            result = {key: _mix_colors(low[key], high[key], amount) for key in low}
+        backgrounds = [
+            _parse_color(result[key])[:3] for key in _CONTRAST_BACKGROUNDS
+        ]
+        for key, floor in _CONTRAST_FLOORS.items():
+            result[key] = _ensure_contrast(result[key], backgrounds, floor)
+        stops[value] = result
+    return stops
+
+
+PALETTES: dict[int, dict[str, str]] = _build_palette_stops()
+
+
+def _stop_palette(value: int) -> dict[str, str]:
+    value = max(THEME_STEPS[0], min(THEME_STEPS[-1], int(value)))
+    return dict(PALETTES[value])
+
+
+def _palette() -> dict[str, str]:
+    palette = _cache.get(_current_value)
+    if palette is None:
+        palette = _stop_palette(_current_value)
+        _cache[_current_value] = palette
+    return palette
+
+
+# ---------------------------------------------------------------------------
+# Public theme API
+# ---------------------------------------------------------------------------
+def current_theme_value() -> int:
+    return _current_value
+
+
+def normalise_theme_value(value: int | float | str) -> int:
+    """Clamp any supplied value onto the six-step ``0``–``5`` palette scale.
+
+    This is the *palette* scale used by :data:`PALETTES`; the Settings surface
+    offers only the three curated appearance stops. Values above ``5`` came
+    from the retired 0–100 slider and are rescaled by one decade first, so a
+    persisted ``40`` lands on stop ``4``.
+    """
+    try:
+        numeric = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    if numeric > THEME_STEPS[-1]:
+        numeric = int(round(numeric / 10.0))
+    return max(THEME_STEPS[0], min(THEME_STEPS[-1], numeric))
+
+
+def normalise_appearance_value(value: int | float | str | None) -> int:
+    """Coerce any persisted appearance preference onto Dark, Graphite or Slate.
+
+    Migration rules (matching the three Settings choices):
+
+    * stops ``0``–``1`` → ``0`` Dark · stops ``2``–``3`` → ``2`` Graphite ·
+      stops ``4``–``5`` → ``4`` Slate
+    * legacy 0–100 slider values: ``0``–``10`` → Dark, ``11``–``30`` →
+      Graphite, ``31`` and above → Slate
+    * names: ``dark`` → Dark, ``graphite`` → Graphite, ``slate`` → Slate, and
+      the retired ``light`` name → Slate
+
+    Values ``0``–``5`` are treated as the current notched stops (the currency
+    written by recent builds); anything above ``5`` is a retired percentage.
+    """
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in THEME_PRESETS:
+            return THEME_PRESETS[text]
+        if text in LEGACY_THEME_NAMES:
+            return LEGACY_THEME_NAMES[text]
+    try:
+        numeric = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return APPEARANCE_VALUES[0]
+    if numeric <= THEME_STEPS[-1]:
+        stop = max(THEME_STEPS[0], int(round(numeric)))
+        if stop <= 1:
+            return 0
+        return 2 if stop <= 3 else 4
+    legacy = int(round(numeric))
+    if legacy <= 10:
+        return 0
+    if legacy <= 30:
+        return 2
+    return 4
+
+
+def migrate_persisted_appearance(state: dict) -> int:
+    """Resolve a persisted ``ui_state`` mapping to a curated appearance stop.
+
+    ``theme_value`` wins over the older ``theme`` name; when neither is present
+    the Deep Dark default applies. Callers persist the returned stop so legacy
+    files are rewritten once and stay migrated.
+    """
+    raw = state.get("theme_value")
+    if raw is None:
+        raw = state.get("theme", DEFAULT_THEME)
+    return normalise_appearance_value(raw)
+
+
+def theme_step_label(value: int) -> str:
+    """Human-readable name for a notched palette stop (``4`` → ``Slate``)."""
+    return THEME_STEP_LABELS[normalise_theme_value(value)]
+
+
+def appearance_label(value: int | float | str | None) -> str:
+    """Human-readable label for a curated appearance stop (``2`` → Graphite)."""
+    return APPEARANCE_LABELS[normalise_appearance_value(value)]
+
+
+def theme_value_for(name: str) -> int:
+    """Resolve a persisted theme name (including legacy ``light``) to a stop."""
+    return normalise_appearance_value(name)
+
+
+def preset_name(value: int | float | str) -> str:
+    target = normalise_appearance_value(value)
+    for name, stop in THEME_PRESETS.items():
+        if stop == target:
+            return name
+    return THEME_DARK
+
 
 def current_theme() -> str:
-    return _current
+    return preset_name(_current_value)
+
+
+def set_theme_value(value: int | float | str) -> int:
+    """Apply a curated appearance stop (legacy values are migrated first)."""
+    global _current_value
+    _current_value = normalise_appearance_value(value)
+    return _current_value
+
+
+def set_theme(name: str | int) -> int:
+    """Backwards-compatible setter accepting a preset name or numeric value."""
+    if isinstance(name, int):
+        return set_theme_value(name)
+    return set_theme_value(theme_value_for(name))
 
 
 def is_dark() -> bool:
-    return _current == THEME_DARK
-
-
-def set_theme(name: str) -> str:
-    global _current
-    _current = THEME_LIGHT if str(name).lower() == THEME_LIGHT else THEME_DARK
-    return _current
+    return _relative_luminance(_parse_color(c("bg"))[:3]) < 0.38
 
 
 def c(key: str) -> str:
-    palette = PALETTES[_current]
-    return palette.get(key, PALETTES[THEME_DARK].get(key, "#FFFFFF"))
+    palette = _palette()
+    return palette.get(key, PALETTES[0].get(key, "#FFFFFF"))
 
 
 def state_color(value: str) -> str:
@@ -137,10 +523,10 @@ def state_color(value: str) -> str:
 
 def rgba(key_or_color: str, alpha: float) -> str:
     """Return a Qt rgba() value from a palette key or a hex color."""
-    color = c(key_or_color) if key_or_color in PALETTES[_current] else key_or_color
-    value = QColor(color)
+    color = c(key_or_color) if key_or_color in PALETTES[0] else key_or_color
+    red, green, blue, _ = _parse_color(color)
     return (
-        f"rgba({value.red()}, {value.green()}, {value.blue()}, "
+        f"rgba({red}, {green}, {blue}, "
         f"{max(0.0, min(1.0, alpha)):.2f})"
     )
 
@@ -157,8 +543,15 @@ def display_font(size: int = 10, weight: QFont.Weight = QFont.Weight.DemiBold) -
     return font
 
 
-def apply_theme(app: QApplication, name: str | None = None) -> str:
-    if name:
+def apply_theme(
+    app: QApplication,
+    name: str | int | None = None,
+    *,
+    value: int | None = None,
+) -> str:
+    if value is not None:
+        set_theme_value(value)
+    elif name is not None:
         set_theme(name)
     app.setStyle("Fusion")
     app.setFont(QFont(FONT_FAMILY, 10))
@@ -172,12 +565,20 @@ def apply_theme(app: QApplication, name: str | None = None) -> str:
     palette.setColor(QPalette.ColorRole.Button, QColor(c("surface_2")))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(c("text")))
     palette.setColor(QPalette.ColorRole.Highlight, QColor(c("accent")))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(c("bg")))
+    highlight_text = (
+        "#FFFFFF"
+        if _contrast_ratio(
+            _parse_color(c("accent"))[:3], (255, 255, 255)
+        )
+        >= _contrast_ratio(_parse_color(c("accent"))[:3], (0, 0, 0))
+        else "#000000"
+    )
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(highlight_text))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(c("faint")))
     palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(c("surface_3")))
     palette.setColor(QPalette.ColorRole.ToolTipText, QColor(c("text")))
     app.setPalette(palette)
-    return _current
+    return current_theme()
 
 
 def enable_native_title_bar(widget: QWidget) -> None:
@@ -190,7 +591,8 @@ def enable_native_title_bar(widget: QWidget) -> None:
         ctypes.windll.dwmapi.DwmSetWindowAttribute(
             hwnd, 20, ctypes.byref(ctypes.c_int(dark)), ctypes.sizeof(ctypes.c_int)
         )
-        color = 0x000B0909 if is_dark() else 0x00F5ECE6
+        background = _parse_color(c("bg"))
+        color = background[0] | (background[1] << 8) | (background[2] << 16)
         for attribute in (35, 34):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd,
@@ -211,9 +613,7 @@ enable_dark_title_bar = enable_native_title_bar
 
 
 def build_stylesheet() -> str:
-    t = {}
-    for key in PALETTES[_current]:
-        t[key] = c(key)
+    t = {key: c(key) for key in PALETTES[0]}
     return f"""
 * {{ outline: 0; }}
 QWidget {{
@@ -276,10 +676,6 @@ QFrame#SuggestedFocus {{
 QFrame#SuggestedFocus:hover {{
     background: {rgba('accent', 0.14)};
     border-color: {t['accent']};
-}}
-QFrame#Launchpad {{
-    background: {t['surface_2']};
-    border-left: 1px solid {t['border']};
 }}
 QFrame#ChatBubbleUser {{
     background: {rgba('accent', 0.12)};

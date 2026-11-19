@@ -3,16 +3,35 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PyQt6.QtCore import QTime, Qt
+from PyQt6.QtCore import QPoint, QTime, QTimer, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QLabel, QPushButton
+from PyQt6.QtWidgets import QFrame, QLabel, QPushButton
 
-from efos_app.models import NodeKind, NodeRef, TaskState
+from efos_app.config import APP_VERSION
+from efos_app.models import NodeKind, NodeRef, SyncState, TaskState
 from efos_app.rag_service import PRIORITY_PROMPT
+from efos_app.ui.calendar_page import GRID_PAD, HOUR_HEIGHT, DayCanvas, WeekCanvas
 from efos_app.ui.dialogs import AvailabilityDialog
 from efos_app.ui.graph import LayoutStore
 from efos_app.ui.main_window import MainWindow
-from efos_app.ui.theme import current_theme
+from efos_app.ui.settings_dialog import (
+    INSPECTOR_WIDTH_PRESETS,
+    LANDING_VIEWS,
+    nearest_inspector_width,
+)
+from efos_app.ui.theme import (
+    APPEARANCE_VALUES,
+    c as theme_color,
+    current_theme,
+    current_theme_value,
+    preset_name,
+)
+from efos_app.ui.widgets import (
+    PANE_GUTTER,
+    PAGE_MARGIN,
+    TOOLBAR_HEIGHT,
+    GreenCheckBox,
+)
 
 def _labels(widget) -> list[str]:  # type: ignore[no-untyped-def]
     return [label.text() for label in widget.findChildren(QLabel)]
@@ -46,6 +65,86 @@ def test_window_navigation_sidebar_and_status(service, qapp):
     # PostgreSQL indicator moved to the bottom-left status bar.
     assert window.db_label.text() == "Postgres"
     assert window.db_meta.text() == service.config.db_display
+    # The scheduler slogan is gone; the version sits beside the SQL guard.
+    assert window.footer_version.text() == (
+        f"EFOS {APP_VERSION} · explicit dependency model"
+    )
+    assert not any("Scheduler · 60s pulse" in text for text in all_labels)
+    # Settings mirrors the workspace nav rows: line-art icon, same gutter and
+    # height, left-aligned label, and it never keeps a checked state.
+    assert window.settings_button.text() == "Settings"
+    assert not window.settings_button.icon().isNull()
+    assert window.settings_button.isCheckable() is False
+    nav = window.nav_buttons[0]
+    assert window.settings_button.iconSize() == nav.iconSize()
+    assert window.settings_button.minimumHeight() == nav.minimumHeight()
+    assert window.settings_button.geometry().x() == nav.geometry().x()
+    assert window.settings_button.width() == nav.width()
+    # The top-right quick theme toggle is gone; only window controls remain.
+    assert not hasattr(window.title_bar, "theme_button")
+    assert len(window.title_bar.findChildren(QPushButton)) == 3
+    # The Manage Inspector starts level with the scrollable content, matching
+    # Flow and Registry rather than floating above the first content card.
+    manage_top = window.dashboard.manage_inspector.mapToGlobal(
+        window.dashboard.manage_inspector.rect().topLeft()
+    ).y()
+    scroll_top = window.dashboard.manage_scroll.mapToGlobal(
+        window.dashboard.manage_scroll.rect().topLeft()
+    ).y()
+    assert manage_top == scroll_top
+    # The duplicate large "Dashboard" heading is gone: Manage | Flow, the
+    # Flow-only canvas tools, and the create actions share one compact toolbar
+    # row as tall as Registry's and Assistant's.
+    dashboard = window.dashboard
+    assert not any(
+        label.text() == "Dashboard" for label in dashboard.findChildren(QLabel)
+    )
+    assert dashboard.toolbar.height() == TOOLBAR_HEIGHT
+    assert dashboard.tabs.parentWidget() is dashboard.toolbar
+    assert all(
+        button.parentWidget() is dashboard.toolbar
+        for button in dashboard._create_buttons
+    )
+    assert [button.text() for button in dashboard._create_buttons] == [
+        "New task",
+        "New project",
+        "New condition",
+    ]
+    for button in dashboard.tabs.buttons:
+        assert button.parentWidget() is dashboard.tabs
+        assert button.parentWidget().parentWidget() is dashboard.toolbar
+    assert dashboard.tabs.current() == 0
+    # Flow-only canvas tools live on the same row and appear only on Flow.
+    assert dashboard.flow_tools.isHidden()
+    dashboard.show_flow()
+    qapp.processEvents()
+    assert not dashboard.flow_tools.isHidden()
+    dashboard.show_manage()
+    qapp.processEvents()
+    assert dashboard.flow_tools.isHidden()
+    # The toolbar and the Tasks/Projects cards below it share the page's left
+    # edge, so the buttons no longer float inside a wider heading block.
+    first_card = dashboard.manage_content.itemAt(0).widget()
+    assert first_card is not None
+    assert dashboard.toolbar.mapTo(dashboard, QPoint(0, 0)).x() == PAGE_MARGIN
+    assert first_card.mapTo(dashboard, QPoint(0, 0)).x() == PAGE_MARGIN
+    assert dashboard.tabs.mapTo(dashboard, QPoint(0, 0)).x() == PAGE_MARGIN
+    # The status-bar version and SQL guard keep a visible gutter.
+    guard = next(
+        label
+        for label in window.findChildren(QLabel)
+        if label.text() == "READ-ONLY SQL GUARD"
+    )
+    version_right = window.footer_version.mapToGlobal(
+        window.footer_version.rect().topRight()
+    ).x()
+    guard_left = guard.mapToGlobal(guard.rect().topLeft()).x()
+    assert guard_left - version_right >= 10
+    assert window.footer_version.width() >= window.footer_version.sizeHint().width()
+    # The empty-state inspector has no stray horizontal or vertical track.
+    empty_scroll = window.dashboard.manage_inspector.scroll
+    assert empty_scroll.horizontalScrollBar().maximum() == 0
+    assert empty_scroll.verticalScrollBar().maximum() == 0
     for index in range(5):
         window.set_page(index)
         qapp.processEvents()
@@ -53,6 +152,16 @@ def test_window_navigation_sidebar_and_status(service, qapp):
     window.scheduler.pulse()
     qapp.processEvents()
     assert not window.grab().isNull()
+    # The version and SQL guard stay separated and unclipped at the minimum
+    # window width.
+    window.resize(1180, 760)
+    qapp.processEvents()
+    assert window.footer_version.width() >= window.footer_version.sizeHint().width()
+    version_right = window.footer_version.mapToGlobal(
+        window.footer_version.rect().topRight()
+    ).x()
+    guard_left = guard.mapToGlobal(guard.rect().topLeft()).x()
+    assert guard_left - version_right >= 10
     window.close()
     qapp.processEvents()
 
@@ -99,6 +208,13 @@ def test_registry_typed_sorting_and_autocomplete(service, qapp):
     qapp.processEvents()
     registry = window.registry
     assert registry.table.rowCount() >= 4
+    # A horizontal gutter separates the sortable table from the Inspector.
+    table_right = registry.table.mapToGlobal(registry.table.rect().topRight()).x()
+    inspector_left = registry.inspector.mapToGlobal(
+        registry.inspector.rect().topLeft()
+    ).x()
+    assert inspector_left - table_right >= 12
+    assert registry.splitter.handleWidth() == PANE_GUTTER
 
     registry._sort_by_column(1)  # state ascending
     qapp.processEvents()
@@ -381,31 +497,401 @@ def test_registry_sort_value_and_null_created_semantics():
         row["created"] for row in RegistryPage._sorted(page, rows)
     ] == [stamp, stamp - timedelta(days=1), None]
 
-def test_theme_toggle_is_persisted_and_rebuilds_light_theme(service, qapp):
-    window = _window(service, qapp, "theme.json")
-    window._sync_timer.stop()
-    window.dashboard.show_flow()
-    before = current_theme()
-    window.toggle_theme()
-    qapp.processEvents()
-    assert window.dashboard.stack.currentIndex() == 1
-    after = current_theme()
-    assert after != before
+def test_appearance_choices_are_dark_graphite_slate_and_persist(service, qapp):
     from efos_app.config import load_ui_state
 
-    assert load_ui_state().get("theme") == after
+    def settle() -> None:
+        # Theme rebuilds recreate the Calendar page, which may immediately start
+        # a background probe or sync. Let those finish before the next change.
+        window._sync_timer.stop()
+        for attr in ("_sync_worker", "_connect_worker"):
+            worker = getattr(window.calendar, attr, None)
+            if worker is not None:
+                worker.wait(3000)
+                setattr(window.calendar, attr, None)
+        qapp.processEvents()
+
+    window = _window(service, qapp, "theme.json")
+    settle()
+    window.dashboard.show_flow()
+
+    start_value = current_theme_value()
+    assert start_value in APPEARANCE_VALUES
+    # The header carries no quick theme toggle any more.
+    assert not hasattr(window.title_bar, "theme_button")
+    window.change_theme_value(0)
+    qapp.processEvents()
+    assert window.dashboard.stack.currentIndex() == 1
+    assert current_theme_value() == 0
+    assert load_ui_state().get("theme_value") == 0
+    assert load_ui_state().get("theme") == preset_name(0) == "dark"
     assert window.centralWidget() is not None
     assert not window.grab().isNull()
-    window._sync_timer.stop()
-    for attr in ("_sync_worker", "_connect_worker"):
-        worker = getattr(window.calendar, attr, None)
-        if worker is not None:
-            worker.wait(3000)
-            setattr(window.calendar, attr, None)
+    settle()
+
+    window.change_theme_value(2)
     qapp.processEvents()
-    window.toggle_theme()
+    assert current_theme_value() == 2
+    assert load_ui_state().get("theme_value") == 2
+    assert load_ui_state().get("theme") == preset_name(2) == "graphite"
+    settle()
+
+    # The retired stop 5 (Neutral Slate) is no longer offered: it collapses
+    # onto the Slate appearance choice.
+    window.change_theme_value(5)
     qapp.processEvents()
-    assert current_theme() == before
+    assert current_theme_value() == 4
+    assert load_ui_state().get("theme_value") == 4
+    assert load_ui_state().get("theme") == preset_name(4) == "slate"
+    settle()
+
+    # Legacy 0–100 percentages migrate onto the three curated choices.
+    window.change_theme_value(20)
+    qapp.processEvents()
+    assert current_theme_value() == 2
+    settle()
+    window.change_theme_value(40)
+    qapp.processEvents()
+    assert current_theme_value() == 4
+
+    settle()
+    window.change_theme_value(start_value)
+    qapp.processEvents()
+    assert current_theme_value() == start_value
+    assert current_theme() == preset_name(start_value)
+    window.close()
+    qapp.processEvents()
+
+
+def test_project_inspector_undefined_requirements_are_consistent(service, qapp):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QComboBox, QSizePolicy
+
+    project = service.create_project("Undefined project")
+    window = _window(service, qapp, "undefined_project.json")
+    window.dashboard.select_manage(NodeRef(NodeKind.PROJECT, project))
+    qapp.processEvents()
+    inspector = window.dashboard.manage_inspector
+    labels = _labels(inspector)
+
+    assert any(text.startswith("Requirements Undefined") for text in labels)
+    assert "Undefined · dependency required" in labels
+    assert "Satisfied" in labels
+    assert "—" in labels
+    # An undefined Project uses the standard em dash, not the ∅ glyph that
+    # renders as a missing-glyph box in Segoe UI's uppercase SectionLabel.
+    assert "DEPENDENCIES · —" in labels
+    assert "DEPENDENCIES · ∅" not in labels
+    # Empty dependency groups collapse instead of stacking empty sub-headers.
+    assert "PRECONDITIONS · 3VL EXTERNAL FACTS" not in labels
+    assert "PREREQUISITES · 2VL INTERNAL STATES" not in labels
+    assert any("No dependencies attached" in text for text in labels)
+    # Previous is no longer part of any inspector view.
+    assert "Previous" not in labels
+    # The inspector is a vertical-only surface.
+    assert (
+        inspector.scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    assert (
+        inspector.scroll.verticalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
+    # Delete lives below NOTE at the very bottom of the content column.
+    def layout_index(widget) -> int:
+        for index in range(inspector.content.count()):
+            if inspector.content.itemAt(index).widget() is widget:
+                return index
+        return -1
+
+    delete = next(
+        button
+        for button in inspector.findChildren(QPushButton)
+        if button.text() == "Delete project"
+    )
+    assert layout_index(delete) > layout_index(inspector._note_edit)
+
+    # Long dependency candidates cannot widen the panel.
+    for other in ("A" * 140, "B" * 140):
+        service.create_task(other)
+    short = service.create_task("Short task")
+    window.refresh_all()
+    window.dashboard.select_manage(NodeRef(NodeKind.TASK, short))
+    qapp.processEvents()
+    inspector = window.dashboard.manage_inspector
+    combos = inspector.findChildren(QComboBox)
+    assert combos
+    for combo in combos:
+        assert combo.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+        assert combo.minimumWidth() == 0
+    assert inspector.scroll.horizontalScrollBar().maximum() == 0
+    assert inspector.host.width() <= inspector.scroll.viewport().width() + 1
+    attach = next(
+        button for button in inspector.findChildren(QPushButton)
+        if button.text() == "Attach"
+    )
+    assert attach.isVisible()
+    attach_right = attach.mapTo(inspector, attach.rect().topLeft()).x() + attach.width()
+    assert attach_right <= inspector.width()
+    # The narrowest persisted width still wraps and elides instead of scrolling.
+    window._settings_width_changed(300)
+    qapp.processEvents()
+    assert inspector.scroll.horizontalScrollBar().maximum() == 0
+    assert inspector.host.width() <= inspector.scroll.viewport().width() + 1
+    attach_right = attach.mapTo(inspector, attach.rect().topLeft()).x() + attach.width()
+    assert attach_right <= inspector.width()
+    window.close()
+    qapp.processEvents()
+
+
+def test_settings_persist_landing_view_width_and_flow_auto_layout(service, qapp):
+    from efos_app.config import load_ui_state
+
+    service.create_project("Settings project")
+    window = _window(service, qapp, "settings.json")
+    window._settings_landing_changed("Flow")
+    window._settings_flow_changed(False)
+    window._settings_width_changed(400)
+    qapp.processEvents()
+    state = load_ui_state()
+    assert state.get("landing_view") == "Flow"
+    assert state.get("flow_auto_layout") is False
+    assert state.get("inspector_width") == 400
+    window.close()
+    qapp.processEvents()
+
+    reopened = _window(service, qapp, "settings_reopened.json")
+    qapp.processEvents()
+    assert reopened.stack.currentIndex() == 1
+    assert reopened.dashboard.stack.currentIndex() == 1
+    assert reopened._landing_view == "Flow"
+    assert reopened._flow_auto_layout is False
+    assert reopened._inspector_width == 400
+    widths = reopened.dashboard.splitter.sizes()
+    assert len(widths) == 2 and 390 <= widths[1] <= 410
+    # Assistant's Query pane follows the same 300–420 px preset once shown.
+    reopened.set_page(3)
+    qapp.processEvents()
+    chat_widths = reopened.chat.splitter.sizes()
+    assert len(chat_widths) == 2 and 390 <= chat_widths[1] <= 410
+    assert reopened.dashboard.flow._startup_auto_layout is False
+    reopened.close()
+    qapp.processEvents()
+
+    # Restore the local defaults for any later test that opens a window.
+    window = _window(service, qapp, "settings_restore.json")
+    window._settings_landing_changed("Dashboard")
+    window._settings_flow_changed(True)
+    window._settings_width_changed(360)
+    window.close()
+    qapp.processEvents()
+
+
+def test_landing_view_options_route_to_the_right_surface(service, qapp):
+    service.create_project("Landing project")
+    window = _window(service, qapp, "landing.json")
+    assert LANDING_VIEWS == (
+        "Overview",
+        "Dashboard",
+        "Flow",
+        "Projects",
+        "Tasks",
+        "Calendar",
+        "Assistant",
+    )
+    for target, page in (
+        ("Overview", 0),
+        ("Calendar", 4),
+        ("Assistant", 3),
+        ("Flow", 1),
+        ("Projects", 1),
+        ("Tasks", 1),
+        ("Dashboard", 1),
+    ):
+        window._landing_view = target
+        window._apply_landing_view()
+        qapp.processEvents()
+        assert window.stack.currentIndex() == page, target
+        if target == "Overview":
+            assert window.stack.currentWidget() is window.overview
+        if target == "Flow":
+            assert window.dashboard.stack.currentIndex() == 1
+        if target in ("Projects", "Tasks", "Dashboard"):
+            assert window.dashboard.stack.currentIndex() == 0
+    window.close()
+    qapp.processEvents()
+
+
+def test_sidebar_gear_opens_settings_dialog(service, qapp):
+    window = _window(service, qapp, "settings_gear.json")
+    observed: dict[str, bool] = {"opened": False}
+
+    def close_dialog() -> None:
+        dialog = window._settings_dialog
+        observed["opened"] = dialog is not None
+        if dialog is not None:
+            dialog._close()
+
+    QTimer.singleShot(80, close_dialog)
+    QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
+    qapp.processEvents()
+    assert observed["opened"] is True
+    assert window._settings_dialog is None
+    window.close()
+    qapp.processEvents()
+
+
+def test_settings_dialog_offers_aligned_exclusive_three_option_groups(service, qapp):
+    from efos_app.config import load_ui_state
+
+    window = _window(service, qapp, "settings_dialog.json")
+    observed: dict[str, object] = {}
+    target = 2 if current_theme_value() != 2 else 4
+
+    def interact() -> None:
+        dialog = window._settings_dialog
+        observed["dialog"] = dialog is not None
+        if dialog is None:
+            return
+        observed["appearance_values"] = sorted(dialog.appearance_boxes)
+        observed["width_values"] = sorted(dialog.width_boxes)
+        observed["appearance_labels"] = [
+            label.text() for label in dialog.appearance_choices.findChildren(QLabel)
+        ]
+        observed["width_labels"] = [
+            label.text() for label in dialog.width_choices.findChildren(QLabel)
+        ]
+        observed["boxes_are_green"] = all(
+            isinstance(box, GreenCheckBox) and box._centered
+            for box in list(dialog.appearance_boxes.values())
+            + list(dialog.width_boxes.values())
+        )
+        observed["checked"] = [
+            value for value, box in dialog.appearance_boxes.items() if box.isChecked()
+        ]
+        # The two groups line up column for column: Dark/300, Graphite/360,
+        # Slate/420 share the same horizontal centers.
+        observed["appearance_centers"] = [
+            label.mapToGlobal(label.rect().center()).x()
+            for label in dialog.appearance_choices.findChildren(QLabel)
+        ]
+        observed["width_centers"] = [
+            label.mapToGlobal(label.rect().center()).x()
+            for label in dialog.width_choices.findChildren(QLabel)
+        ]
+        # Exclusive selection: choosing one unchecks the other two.
+        QTest.mouseClick(dialog.appearance_boxes[4], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(dialog.appearance_boxes[target], Qt.MouseButton.LeftButton)
+        observed["exclusive"] = (
+            dialog.appearance_boxes[target].isChecked(),
+            sum(1 for box in dialog.appearance_boxes.values() if box.isChecked()),
+        )
+        # Clicking the checked choice keeps it checked: never an empty group.
+        QTest.mouseClick(dialog.appearance_boxes[target], Qt.MouseButton.LeftButton)
+        observed["sticky"] = dialog.appearance_boxes[target].isChecked()
+        # Width choices are applied on Save, not on click.
+        observed["width_before"] = window.dashboard.splitter.sizes()[1]
+        QTest.mouseClick(dialog.width_boxes[300], Qt.MouseButton.LeftButton)
+        observed["width_during"] = window.dashboard.splitter.sizes()[1]
+        dialog._flush_theme()
+        observed["theme_after"] = current_theme_value()
+        observed["green_flow_check"] = isinstance(dialog.flow_check, GreenCheckBox)
+        observed["flow_text"] = dialog.flow_check.text()
+        observed["combo"] = [
+            dialog.landing_combo.itemText(index)
+            for index in range(dialog.landing_combo.count())
+        ]
+        dialog._close()
+
+    QTimer.singleShot(80, interact)
+    window.open_settings()
+    qapp.processEvents()
+
+    assert observed.get("dialog") is True
+    assert observed["appearance_values"] == [0, 2, 4]
+    assert observed["width_values"] == list(INSPECTOR_WIDTH_PRESETS)
+    assert observed["appearance_labels"] == ["Dark", "Graphite", "Slate"]
+    assert observed["width_labels"] == ["300 px", "360 px", "420 px"]
+    assert observed["boxes_are_green"] is True
+    assert len(observed["checked"]) == 1
+    assert observed["exclusive"] == (True, 1)
+    assert observed["sticky"] is True
+    assert all(
+        abs(left - right) <= 1
+        for left, right in zip(
+            observed["appearance_centers"], observed["width_centers"]
+        )
+    )
+    assert observed["width_before"] == observed["width_during"]
+    assert observed["theme_after"] == target
+    assert current_theme_value() == target
+    assert observed["green_flow_check"] is True
+    assert observed["flow_text"] == "Auto-layout the Flow canvas on startup"
+    assert "Assistant" in observed["combo"]
+    # Save applies the newly chosen 300 px preset.
+    assert load_ui_state().get("inspector_width") == 300
+    assert abs(window.dashboard.splitter.sizes()[1] - 300) <= 12
+    assert window.centralWidget() is not None
+    assert not window.grab().isNull()
+    window.close()
+    qapp.processEvents()
+
+
+def test_settings_width_snaps_to_nearest_preset_without_applying_on_cancel(
+    service, qapp
+):
+    from efos_app.config import load_ui_state
+
+    window = _window(service, qapp, "settings_width.json")
+    # A live drag can sit between presets; Settings selects the nearest one.
+    window._settings_width_changed(400)
+    qapp.processEvents()
+    assert load_ui_state().get("inspector_width") == 400
+    observed: dict[str, object] = {}
+
+    def interact() -> None:
+        dialog = window._settings_dialog
+        observed["selected"] = dialog.width_value
+        observed["checked"] = [
+            value for value, box in dialog.width_boxes.items() if box.isChecked()
+        ]
+        observed["nearest"] = nearest_inspector_width(400)
+        dialog.reject()
+
+    QTimer.singleShot(80, interact)
+    window.open_settings()
+    qapp.processEvents()
+    assert observed["nearest"] == 420
+    assert observed["selected"] == 420
+    assert observed["checked"] == [420]
+    # Cancel must not snap the live splitter or the persisted width.
+    assert load_ui_state().get("inspector_width") == 400
+    assert abs(window.dashboard.splitter.sizes()[1] - 400) <= 12
+    window.close()
+    qapp.processEvents()
+
+
+def test_flow_startup_auto_layout_runs_only_once(service, qapp):
+    service.create_task("Flow startup task")
+    window = _window(service, qapp, "flow_startup.json")
+    flow = window.dashboard.flow
+    flow.set_startup_auto_layout(True)
+    flow.set_startup_layout_pending(True)
+    calls = {"count": 0}
+    original = flow._auto_layout
+
+    def probe() -> None:
+        calls["count"] += 1
+        original()
+
+    flow._auto_layout = probe  # type: ignore[method-assign]
+    window.dashboard.show_flow()
+    qapp.processEvents()
+    assert calls["count"] == 1
+    # Revisiting Flow during the same launch must not re-run the layout.
+    window.dashboard.show_flow()
+    qapp.processEvents()
+    assert calls["count"] == 1
     window.close()
     qapp.processEvents()
 
@@ -447,6 +933,7 @@ def test_availability_dialog_and_status_are_presented_separately(service, qapp):
     labels = _labels(inspector)
     for field in ("Status", "Availability", "Schedule", "Recurrence"):
         assert field in labels
+    assert "Previous" not in labels
     # A Ready Task scheduled in the future remains Ready.
     assert "Ready" in labels
 
@@ -464,5 +951,235 @@ def test_availability_dialog_and_status_are_presented_separately(service, qapp):
     labels = _labels(window.dashboard.manage_inspector)
     assert "Blocked" in labels
     assert not any("Scheduled window" in text for text in labels)
+    window.close()
+    qapp.processEvents()
+
+
+def test_unified_two_pane_geometry_across_workspace_views(service, qapp):
+    service.create_task("Geometry task")
+    window = _window(service, qapp, "geometry.json")
+    qapp.processEvents()
+
+    def top(widget) -> int:  # type: ignore[no-untyped-def]
+        return widget.mapTo(window, QPoint(0, 0)).y()
+
+    def bottom(widget) -> int:  # type: ignore[no-untyped-def]
+        return widget.mapTo(window, QPoint(0, widget.height())).y()
+
+    # Identical 24 px outer padding on the three page containers. Flow lives
+    # inside the already-padded Dashboard stack, so it has no extra margin.
+    for page in (window.dashboard, window.registry, window.chat):
+        margins = page.layout().contentsMargins()
+        assert (
+            margins.left(),
+            margins.top(),
+            margins.right(),
+            margins.bottom(),
+        ) == (PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+
+    measured: list[tuple[str, object]] = []
+    window.set_page(1)
+    window.dashboard.show_manage()
+    qapp.processEvents()
+    assert window.dashboard.splitter.handleWidth() == PANE_GUTTER
+    measured.append(("Manage", window.dashboard.splitter))
+
+    window.dashboard.show_flow()
+    qapp.processEvents()
+    assert window.dashboard.flow.splitter.handleWidth() == PANE_GUTTER
+    measured.append(("Flow", window.dashboard.flow.splitter))
+
+    window.set_page(2)
+    qapp.processEvents()
+    assert window.registry.splitter.handleWidth() == PANE_GUTTER
+    measured.append(("Registry", window.registry.splitter))
+
+    window.set_page(3)
+    qapp.processEvents()
+    assert window.chat.splitter.handleWidth() == PANE_GUTTER
+    measured.append(("Assistant", window.chat.splitter))
+
+    tops: list[int] = []
+    bottoms: list[int] = []
+    for name, splitter in measured:
+        left = splitter.widget(0)
+        right = splitter.widget(1)
+        assert left is not None and right is not None, name
+        assert abs(top(left) - top(right)) <= 1, name
+        assert abs(bottom(left) - bottom(right)) <= 1, name
+        tops.append(top(left))
+        bottoms.append(bottom(left))
+    # Both panes start and end at the same Y in every view, and every view
+    # shares that geometry.
+    assert len(set(tops)) == 1, tops
+    assert len(set(bottoms)) == 1, bottoms
+
+    # Assistant's Query pane is a rounded card constrained to 300–420 px.
+    query = window.chat.splitter.widget(1)
+    assert isinstance(query, QFrame)
+    assert query.property("card") is True
+    assert query.minimumWidth() == 300
+    assert query.maximumWidth() == 420
+    assert 300 <= window.chat.splitter.sizes()[1] <= 420
+    window.close()
+    qapp.processEvents()
+
+
+def test_assistant_auto_scrolls_to_bottom_and_uses_the_shared_splitter(service, qapp):
+    window = _window(service, qapp, "chat_scroll.json")
+    window.set_page(3)
+    qapp.processEvents()
+    chat = window.chat
+    assert chat.splitter.handleWidth() == PANE_GUTTER
+    assert isinstance(chat.splitter.widget(0), QFrame)
+    assert chat.splitter.widget(0).property("card") is True
+
+    long_thread = service.create_thread()
+    for index in range(24):
+        service.append_message(
+            long_thread, "user", f"Question {index} " + "context " * 14
+        )
+        service.append_message(
+            long_thread, "assistant", f"Answer {index} " + "detail " * 46
+        )
+    short_thread = service.create_thread()
+    service.append_message(short_thread, "user", "Short question")
+
+    def settle() -> None:
+        qapp.processEvents()
+        QTest.qWait(140)
+        qapp.processEvents()
+
+    chat.thread_id = long_thread
+    chat._load_thread(long_thread, render=True)
+    settle()
+    bar = chat.stream_scroll.verticalScrollBar()
+    assert bar.maximum() > 0
+    assert bar.value() == bar.maximum()
+
+    # Switching threads re-pins the new conversation to its bottom.
+    chat.thread_id = short_thread
+    chat._load_thread(short_thread, render=True)
+    settle()
+    assert bar.value() == bar.maximum()
+
+    chat.thread_id = long_thread
+    chat._load_thread(long_thread, render=True)
+    settle()
+    assert bar.value() == bar.maximum()
+
+    # Returning to the page pins the conversation to its newest message.
+    bar.setValue(0)
+    window.set_page(1)
+    window.set_page(3)
+    settle()
+    assert bar.value() == bar.maximum()
+    window.close()
+    qapp.processEvents()
+
+
+def test_calendar_time_grid_has_padding_and_a_closing_24_hour_border(service, qapp):
+    window = _window(service, qapp, "calendar_grid.json")
+    window.set_page(4)
+    qapp.processEvents()
+    calendar = window.calendar
+    expected_height = GRID_PAD * 2 + 24 * HOUR_HEIGHT
+    assert GRID_PAD >= 12
+    for canvas in (calendar.day_view.canvas, calendar.week_view.canvas):
+        assert isinstance(canvas, (DayCanvas, WeekCanvas))
+        assert canvas.height() == expected_height
+        # The 12 AM label rect opens at GRID_PAD - 7, so it can never be clipped
+        # when the grid is scrolled all the way to the top.
+        assert GRID_PAD - 7 >= 5
+        # The 24:00 closing border sits GRID_PAD above the canvas bottom.
+        assert expected_height - (GRID_PAD + 24 * HOUR_HEIGHT) == GRID_PAD
+        # Painting must not raise (grab() forces a full paintEvent).
+        assert not canvas.grab().isNull()
+
+    for view in (calendar.day_view, calendar.week_view):
+        bar = view.scroll.verticalScrollBar()
+        bar.setValue(0)
+        qapp.processEvents()
+        assert bar.value() == 0
+        assert bar.maximum() >= view.canvas.height() - view.scroll.viewport().height()
+        bar.setValue(bar.maximum())
+        qapp.processEvents()
+        assert bar.value() == bar.maximum()
+    window.close()
+    qapp.processEvents()
+
+
+def test_calendar_connect_failure_always_resets_the_button_and_banner(service, qapp):
+    window = _window(service, qapp, "calendar_oauth.json")
+    window.set_page(4)
+    qapp.processEvents()
+    calendar = window.calendar
+
+    calendar.connect_button.setText("Waiting for Google…")
+    calendar.connect_button.setEnabled(False)
+    calendar._connect_failed("Google OAuth client credentials are not configured.")
+    assert calendar.connect_button.text() == "Connect Google"
+    assert "connection failed" in calendar.warning.text().lower()
+    assert "not configured" in calendar.warning.text()
+    assert not calendar.warning.isHidden()
+
+    # A wedged worker is caught by the watchdog instead of hanging forever.
+    calendar._connect_worker = type(
+        "Probe", (), {"isRunning": lambda self: True}
+    )()
+    calendar.connect_button.setText("Waiting for Google…")
+    calendar.connect_button.setEnabled(False)
+    calendar._connect_timed_out()
+    assert calendar.connect_button.text() == "Connect Google"
+    assert "too long" in calendar.warning.text().lower()
+    calendar._connect_worker = None
+
+    # finished() normalises the label even when no signal preceded it.
+    calendar.connect_button.setText("Waiting for Google…")
+    calendar.connect_button.setEnabled(False)
+    calendar._connect_finished()
+    assert calendar.connect_button.text() == "Connect Google"
+    assert not calendar.warning.isHidden()
+    window.close()
+    qapp.processEvents()
+
+
+def test_calendar_auto_syncs_stale_credentials_and_shows_a_green_banner(
+    service, qapp, monkeypatch
+):
+    window = _window(service, qapp, "calendar_autosync.json")
+    window.set_page(4)
+    qapp.processEvents()
+    calendar = window.calendar
+
+    stale_at = datetime.now().replace(microsecond=0) - timedelta(hours=2)
+    stale = SyncState(status="stale", last_sync_at=stale_at, connected=True)
+
+    calls: list[dict] = []
+    monkeypatch.setattr(calendar, "sync_now", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(calendar.service, "calendar_sync_state", lambda: stale)
+    calendar._maybe_auto_sync()
+    assert calls, "stale stored credentials should trigger a background sync"
+
+    # A fresh snapshot is left alone.
+    fresh = SyncState(
+        status="ok", last_sync_at=datetime.now().replace(microsecond=0), connected=True
+    )
+    monkeypatch.setattr(calendar.service, "calendar_sync_state", lambda: fresh)
+    calls.clear()
+    calendar._maybe_auto_sync()
+    assert not calls
+
+    # Completion updates the persisted timestamp and turns the banner green
+    # immediately (the service persists last_sync_at before returning).
+    completed_at = datetime.now().replace(microsecond=0)
+    completed = SyncState(status="ok", last_sync_at=completed_at, connected=True)
+    monkeypatch.setattr(calendar.service, "calendar_sync_state", lambda: completed)
+    calendar._sync_ready(completed)
+    assert calendar.warning.text() == (
+        "Google Calendar synchronized · "
+        f"{completed_at.strftime('%b %d, %H:%M')}"
+    )
+    assert f"color: {theme_color('green')}" in calendar.warning.styleSheet()
     window.close()
     qapp.processEvents()

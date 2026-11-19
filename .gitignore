@@ -11,3 +11,8 @@ release/
 __pycache__/
 *.pyc
 .pytest_cache/
+pytest-cache-files-*/
+
+.efos-test-data/
+
+.venv/

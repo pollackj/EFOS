@@ -73,7 +73,7 @@ class CalendarSyncWorker(QThread):
             state = self.service.sync_calendar(force_full=self.force_full)
             self.state_ready.emit(state)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(_failure_text(exc, "syncing Google Calendar"))
 
 
 class CalendarConnectWorker(QThread):
@@ -85,8 +85,26 @@ class CalendarConnectWorker(QThread):
         self.service = service
 
     def run(self) -> None:
+        # Every failure path — missing configuration, browser launch failure,
+        # timeout, denied consent, token exchange error — must surface as a
+        # ``failed`` signal so the Calendar button can reset from
+        # "Waiting for Google…" instead of hanging indefinitely.
         try:
+            if not self.service.config.google_enabled:
+                self.failed.emit(
+                    "Set EFOS_GOOGLE_CLIENT_ID, EFOS_GOOGLE_CLIENT_SECRET, and "
+                    "EFOS_GOOGLE_CALENDAR_ID first."
+                )
+                return
             state = self.service.connect_calendar()
             self.state_ready.emit(state)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(_failure_text(exc, "authorizing Google Calendar"))
+
+
+def _failure_text(exc: BaseException, action: str) -> str:
+    """Readable failure text even for exceptions with an empty ``str()``."""
+    message = str(exc).strip()
+    if message:
+        return message
+    return f"{type(exc).__name__} while {action}."

@@ -36,8 +36,16 @@ from .theme import c, rgba, state_color
 from .widgets import Badge, Divider, SegmentedControl
 
 HOUR_HEIGHT = 54
+# Vertical breathing room inside the scrollable time grid: the 12 AM label at
+# 00:00 must never be clipped when the view is scrolled to the very top, and
+# the 24:00 closing border needs air below it when scrolled to the very bottom.
+GRID_PAD = 14
 GUTTER = 58
 VIEWS = ("Day", "Week", "Month", "Schedule")
+# The page watchdog sits above the service's own 90 s OAuth deadline so the
+# actionable timeout message normally comes from the worker; this is only a
+# last-resort reset for a wedged thread.
+OAUTH_UI_TIMEOUT_MS = 180_000
 
 def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
     while layout.count():
@@ -91,7 +99,7 @@ class DayCanvas(_ItemCanvas):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.setFixedHeight(24 * HOUR_HEIGHT)
+        self.setFixedHeight(GRID_PAD * 2 + 24 * HOUR_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_items(self, day: datetime, items: list[CalendarItem]) -> None:
@@ -108,20 +116,25 @@ class DayCanvas(_ItemCanvas):
         painter.fillRect(self.rect(), QColor(c("surface")))
         painter.setFont(QFont("Segoe UI", 8))
         for hour in range(24):
-            y = hour * HOUR_HEIGHT
+            y = GRID_PAD + hour * HOUR_HEIGHT
             painter.setPen(QPen(QColor(c("border")), 1))
             painter.drawLine(GUTTER, y, width, y)
             painter.setPen(QColor(c("faint")))
             painter.drawText(QRectF(0, y - 7, GUTTER - 8, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, hour_label(hour))
         painter.setPen(QPen(QColor(c("border")), 1))
-        painter.drawLine(GUTTER, 0, GUTTER, 24 * HOUR_HEIGHT)
+        painter.drawLine(GUTTER, GRID_PAD, GUTTER, GRID_PAD + 24 * HOUR_HEIGHT)
+        # Crisp closing border at 24:00, with GRID_PAD of breathing room below.
+        painter.setPen(QPen(QColor(c("border_hi")), 1))
+        painter.drawLine(
+            GUTTER, GRID_PAD + 24 * HOUR_HEIGHT, width, GRID_PAD + 24 * HOUR_HEIGHT
+        )
 
         layout_items = _overlap_layout(self.items)
         for item, column, columns in layout_items:
             start = max(item.start, self.day)
             end = min(item.end, self.day + timedelta(days=1))
-            top = (start - self.day).total_seconds() / 3600 * HOUR_HEIGHT
-            bottom = (end - self.day).total_seconds() / 3600 * HOUR_HEIGHT
+            top = GRID_PAD + (start - self.day).total_seconds() / 3600 * HOUR_HEIGHT
+            bottom = GRID_PAD + (end - self.day).total_seconds() / 3600 * HOUR_HEIGHT
             height = max(18.0, bottom - top)
             available = width - GUTTER - 8
             rect = QRectF(
@@ -224,7 +237,12 @@ class DayView(QWidget):
             self.allday_layout.addWidget(chip)
         self.allday_layout.addStretch(1)
         self.canvas.set_items(day, items)
-        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(8 * HOUR_HEIGHT - 20))
+        QTimer.singleShot(
+            0,
+            lambda: self.scroll.verticalScrollBar().setValue(
+                8 * HOUR_HEIGHT - 20 + GRID_PAD
+            ),
+        )
 
 class WeekAllDayCanvas(_ItemCanvas):
     open_requested = pyqtSignal(str)
@@ -299,7 +317,7 @@ class WeekCanvas(_ItemCanvas):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.week_start = datetime.now()
-        self.setFixedHeight(24 * HOUR_HEIGHT)
+        self.setFixedHeight(GRID_PAD * 2 + 24 * HOUR_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_items(self, week_start: datetime, items: list[CalendarItem]) -> None:
@@ -319,9 +337,10 @@ class WeekCanvas(_ItemCanvas):
         width = self.width()
         painter.fillRect(self.rect(), QColor(c("surface")))
         column_width = (width - GUTTER) / 7
+        grid_bottom = GRID_PAD + 24 * HOUR_HEIGHT
         painter.setFont(QFont("Segoe UI", 8))
         for hour in range(24):
-            y = hour * HOUR_HEIGHT
+            y = GRID_PAD + hour * HOUR_HEIGHT
             painter.setPen(QPen(QColor(c("border")), 1))
             painter.drawLine(GUTTER, y, width, y)
             painter.setPen(QColor(c("faint")))
@@ -335,13 +354,18 @@ class WeekCanvas(_ItemCanvas):
             day_date = (self.week_start + timedelta(days=day_index)).date()
             x = GUTTER + day_index * column_width
             painter.setPen(QPen(QColor(c("border")), 1))
-            painter.drawLine(QPointF(x, 0), QPointF(x, 24 * HOUR_HEIGHT))
+            painter.drawLine(QPointF(x, GRID_PAD), QPointF(x, grid_bottom))
             if day_date == today:
                 painter.setPen(Qt.PenStyle.NoPen)
                 highlight = QColor(c("accent"))
                 highlight.setAlphaF(0.06)
                 painter.setBrush(highlight)
-                painter.drawRect(QRectF(x, 0, column_width, 24 * HOUR_HEIGHT))
+                painter.drawRect(
+                    QRectF(x, GRID_PAD, column_width, 24 * HOUR_HEIGHT)
+                )
+        # Crisp closing border at 24:00 with GRID_PAD of breathing room below.
+        painter.setPen(QPen(QColor(c("border_hi")), 1))
+        painter.drawLine(GUTTER, grid_bottom, width, grid_bottom)
         for day_index in range(7):
             day = (self.week_start + timedelta(days=day_index)).replace(hour=0, minute=0, second=0, microsecond=0)
             day_items = [
@@ -353,8 +377,8 @@ class WeekCanvas(_ItemCanvas):
             for item, column, columns in layout_items:
                 start = max(item.start, day)
                 end = min(item.end, day + timedelta(days=1))
-                top = (start - day).total_seconds() / 3600 * HOUR_HEIGHT
-                bottom = (end - day).total_seconds() / 3600 * HOUR_HEIGHT
+                top = GRID_PAD + (start - day).total_seconds() / 3600 * HOUR_HEIGHT
+                bottom = GRID_PAD + (end - day).total_seconds() / 3600 * HOUR_HEIGHT
                 available = column_width
                 rect = QRectF(
                     GUTTER + day_index * column_width + 3 + column * (available / columns),
@@ -414,7 +438,12 @@ class WeekView(QWidget):
             self.header_layout.addWidget(label, 1)
         self.allday.set_items(week_start, items)
         self.canvas.set_items(week_start, items)
-        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(8 * HOUR_HEIGHT - 20))
+        QTimer.singleShot(
+            0,
+            lambda: self.scroll.verticalScrollBar().setValue(
+                8 * HOUR_HEIGHT - 20 + GRID_PAD
+            ),
+        )
 
 class MonthCell(QFrame):
     open_requested = pyqtSignal(str)
@@ -635,6 +664,12 @@ class CalendarPage(QWidget):
         self.sync_state = SyncState()
         self._sync_worker: CalendarSyncWorker | None = None
         self._connect_worker: CalendarConnectWorker | None = None
+        # Failsafe: the OAuth worker resets the button itself, and this timer
+        # guarantees "Waiting for Google…" can never persist indefinitely even
+        # if the worker thread wedges inside the browser hand-off.
+        self._connect_watchdog = QTimer(self)
+        self._connect_watchdog.setSingleShot(True)
+        self._connect_watchdog.timeout.connect(self._connect_timed_out)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 14, 24, 18)
@@ -722,10 +757,40 @@ class CalendarPage(QWidget):
         self.anchor = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         self.reload()
 
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        # Entering Calendar with stored credentials should refresh a stale
+        # snapshot without waiting for the 15-minute background timer.
+        QTimer.singleShot(0, self._maybe_auto_sync)
+
     def refresh(self, view: WorkspaceView) -> None:
         self.view = view
         self._refresh_sync_state()
         self.reload()
+        QTimer.singleShot(0, self._maybe_auto_sync)
+
+    def _maybe_auto_sync(self) -> None:
+        """Sync in the background when valid stored credentials are stale.
+
+        The check is deliberately best-effort: a failure here must never raise
+        into the UI thread or interrupt page rendering.
+        """
+        if self._sync_worker is not None or self._connect_worker is not None:
+            return
+        try:
+            state = self.service.calendar_sync_state()
+        except Exception:
+            return
+        if not state.connected:
+            return
+        if state.status == "ok" and state.last_sync_at is not None:
+            try:
+                age = datetime.now() - state.last_sync_at
+            except (TypeError, ValueError):
+                age = None
+            if age is not None and age < timedelta(minutes=5):
+                return
+        self.sync_now()
 
     def reload(self) -> None:
         start, end, label = self._range()
@@ -773,35 +838,39 @@ class CalendarPage(QWidget):
         )
 
     # ------------------------------------------------------------------- sync
+    def _set_banner(self, text: str, tone: str = "warn") -> None:
+        """Render the Calendar banner with a consistent tone-aware palette."""
+        styles = {
+            "ok": (c("green"), rgba("green", 0.06), rgba("green", 0.20)),
+            "warn": (c("amber"), rgba("amber", 0.08), rgba("amber", 0.24)),
+            "error": (c("red"), rgba("red", 0.08), rgba("red", 0.24)),
+        }
+        foreground, background, border = styles.get(tone, styles["warn"])
+        self.warning.setText(text)
+        self.warning.setStyleSheet(
+            f"color: {foreground}; background: {background}; "
+            f"border: 1px solid {border}; border-radius: 8px; "
+            "padding: 6px 10px; font-size: 10px;"
+        )
+        self.warning.show()
+
     def _refresh_sync_state(self) -> None:
         try:
             self.sync_state = self.service.calendar_sync_state()
         except EFOSError:
             self.sync_state = SyncState()
-        warning = self.sync_state.warning
-        if warning:
-            self.warning.setText(warning)
-            self.warning.setStyleSheet(
-                f"color: {c('amber')}; background: {rgba('amber', 0.08)}; "
-                f"border: 1px solid {rgba('amber', 0.24)}; border-radius: 8px; "
-                "padding: 6px 10px; font-size: 10px;"
-            )
-            self.warning.show()
+        state = self.sync_state
+        if state.status == "ok" and state.last_sync_at is not None:
+            # Completed sync: show the freshly persisted timestamp, never a
+            # placeholder "now" that hides a missing sync.
+            stamp = state.last_sync_at.strftime("%b %d, %H:%M")
+            self._set_banner(f"Google Calendar synchronized · {stamp}", "ok")
         else:
-            state_time = (
-                self.sync_state.last_sync_at.strftime("%b %d, %H:%M")
-                if self.sync_state.last_sync_at
-                else "now"
+            self._set_banner(
+                state.warning or "Google Calendar is not connected", "warn"
             )
-            self.warning.setText(f"Google Calendar synchronized · {state_time}")
-            self.warning.setStyleSheet(
-                f"color: {c('green')}; background: {rgba('green', 0.06)}; "
-                f"border: 1px solid {rgba('green', 0.20)}; border-radius: 8px; "
-                "padding: 6px 10px; font-size: 10px;"
-            )
-            self.warning.show()
         self.connect_button.setEnabled(bool(self.service.config.google_enabled))
-        self.sync_button.setEnabled(self.sync_state.connected)
+        self.sync_button.setEnabled(state.connected)
         if not self.service.config.google_enabled:
             self.connect_button.setToolTip(
                 "Set EFOS_GOOGLE_CLIENT_ID, EFOS_GOOGLE_CLIENT_SECRET, and "
@@ -812,11 +881,12 @@ class CalendarPage(QWidget):
         if self._sync_worker is not None:
             return
         if not self.service.config.google_enabled and not self.sync_state.connected:
-            self.toast_requested.emit("Google OAuth credentials are not configured.", "error")
+            message = "Google OAuth credentials are not configured."
+            self.toast_requested.emit(message, "error")
+            self._set_banner(message, "error")
             return
         self.sync_button.setEnabled(False)
-        self.warning.setText("Synchronizing incremental changes…")
-        self.warning.show()
+        self._set_banner("Synchronizing incremental changes…", "warn")
         self._sync_worker = CalendarSyncWorker(self.service, force_full=force_full, parent=self)
         self._sync_worker.state_ready.connect(self._sync_ready)
         self._sync_worker.failed.connect(self._sync_failed)
@@ -830,6 +900,8 @@ class CalendarPage(QWidget):
             self._sync_worker = None
 
     def _sync_ready(self, state: SyncState) -> None:
+        # The service persists last_sync_at before returning, so this refresh
+        # shows the new timestamp and turns the banner green immediately.
         self.sync_state = state
         self._refresh_sync_state()
         self.reload()
@@ -837,38 +909,79 @@ class CalendarPage(QWidget):
     def _sync_failed(self, message: str) -> None:
         self.toast_requested.emit(message, "error")
         self._refresh_sync_state()
+        self._set_banner(f"Google Calendar sync failed — {message}", "error")
+
+    # ------------------------------------------------------------------ OAuth
+    def _reset_connect_button(self) -> None:
+        self.connect_button.setText("Connect Google")
+        self.connect_button.setEnabled(bool(self.service.config.google_enabled))
 
     def _connect_google(self) -> None:
         if not self.service.config.google_enabled:
-            self.toast_requested.emit(
+            message = (
                 "Set EFOS_GOOGLE_CLIENT_ID, EFOS_GOOGLE_CLIENT_SECRET, and "
-                "EFOS_GOOGLE_CALENDAR_ID first.", "error")
+                "EFOS_GOOGLE_CALENDAR_ID first."
+            )
+            self.toast_requested.emit(message, "error")
+            self._set_banner(message, "error")
             return
         if self._connect_worker is not None:
+            self._set_banner(
+                "Google authorization is still in progress — finish the consent "
+                "screen in your browser.",
+                "warn",
+            )
             return
         self.connect_button.setEnabled(False)
         self.connect_button.setText("Waiting for Google…")
+        self._set_banner(
+            "Waiting for Google authorization — a browser tab should open. "
+            "Complete the consent screen there, then return to EFOS.",
+            "warn",
+        )
         self._connect_worker = CalendarConnectWorker(self.service, self)
         self._connect_worker.state_ready.connect(self._connect_ready)
         self._connect_worker.failed.connect(self._connect_failed)
         self._connect_worker.finished.connect(self._connect_finished)
         self._connect_worker.start()
+        self._connect_watchdog.start(OAUTH_UI_TIMEOUT_MS)
+
+    def _connect_timed_out(self) -> None:
+        if self._connect_worker is None:
+            return
+        self._reset_connect_button()
+        message = (
+            "Google authorization is taking too long. Check your browser for the "
+            "consent tab, then press Connect Google to try again."
+        )
+        self.toast_requested.emit(message, "error")
+        self._set_banner(message, "error")
 
     def _connect_finished(self) -> None:
-        self.connect_button.setText("Connect Google")
-        self.connect_button.setEnabled(bool(self.service.config.google_enabled))
+        # Runs after state_ready/failed in every case, so the button can never
+        # remain stuck on "Waiting for Google…".
+        self._connect_watchdog.stop()
+        self._reset_connect_button()
         if self._connect_worker is not None:
             self._connect_worker.deleteLater()
             self._connect_worker = None
 
     def _connect_ready(self, state: SyncState) -> None:
+        self._connect_watchdog.stop()
         self.sync_state = state
         self._refresh_sync_state()
         self.reload()
 
     def _connect_failed(self, message: str) -> None:
+        self._connect_watchdog.stop()
+        # Reset immediately instead of waiting for finished(): the user must
+        # see an actionable banner and a usable button the moment OAuth fails.
+        self._reset_connect_button()
         self.toast_requested.emit(message, "error")
         self._refresh_sync_state()
+        self._set_banner(
+            f"Google Calendar connection failed — {message}", "error"
+        )
 
     def _open_task(self, task_id: str) -> None:
         from ..models import NodeKind, NodeRef
@@ -876,6 +989,7 @@ class CalendarPage(QWidget):
         self.open_node.emit(NodeRef(NodeKind.TASK, task_id))
 
     def shutdown(self) -> None:
+        self._connect_watchdog.stop()
         for worker in (self._sync_worker, self._connect_worker):
             if worker is not None and worker.isRunning():
                 worker.wait(1500)
