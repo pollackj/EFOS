@@ -1,8 +1,7 @@
 """Modal dialogs: creation, recurrence, collisions, setup, and schema errors."""
 from __future__ import annotations
-
+import secrets
 from datetime import datetime
-
 from PyQt6.QtCore import QDate, QTime, Qt
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
@@ -25,37 +24,23 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..config import (
-    DbProfile,
-    save_runtime_password,
-    save_runtime_profile,
-)
+from ..config import (DbProfile, save_runtime_password, save_runtime_profile)
 from ..db import provision_database, test_connection
 from ..errors import EFOSError
 from ..formatting import fmt_datetime
 from ..logic import availability_summary, normalize_availability_windows
-from ..models import (
-    AvailabilityWindow,
-    CalendarItem,
-    NodeKind,
-    RecurrenceFrequency,
-    RecurrenceRule,
-)
+from ..models import (AvailabilityWindow, CalendarItem, NodeKind, RecurrenceFrequency, RecurrenceRule)
 from .theme import c, enable_native_title_bar, rgba
 from .widgets import Badge, Card, Divider, GreenCheckBox, IconButton
 
 class BaseDialog(QDialog):
-    def __init__(
-        self, parent: QWidget | None, title: str, subtitle: str = "", width: int = 520
-    ):
+    def __init__(self, parent: QWidget | None, title: str, subtitle: str = "", width: int = 520):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setModal(True)
         self.setMinimumWidth(width)
-        self.setStyleSheet(
-            f"QDialog {{ background: {c('surface')}; border: 1px solid {c('border_hi')}; }}"
-        )
+        self.setStyleSheet(f"QDialog {{ background: {c('surface')}; border: 1px solid {c('border_hi')}; }}")
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(24, 22, 24, 20)
         self.root.setSpacing(14)
@@ -223,8 +208,7 @@ class RecurrenceDialog(BaseDialog):
         until = rule.until_date if rule else None
 
         self.frequency = QComboBox()
-        for value in RecurrenceFrequency:
-            self.frequency.addItem(value.label, value)
+        for value in RecurrenceFrequency: self.frequency.addItem(value.label, value)
         self.frequency.setCurrentIndex(max(0, self.frequency.findData(frequency)))
         self.frequency.currentIndexChanged.connect(self._sync_visibility)
         self.root.addWidget(self._labeled("REPEAT", self.frequency))
@@ -290,10 +274,8 @@ class RecurrenceDialog(BaseDialog):
         self.ends_combo.addItem("Never", "never")
         self.ends_combo.addItem("After a number of occurrences", "count")
         self.ends_combo.addItem("On a date", "until")
-        if count is not None:
-            self.ends_combo.setCurrentIndex(1)
-        elif until is not None:
-            self.ends_combo.setCurrentIndex(2)
+        if count is not None: self.ends_combo.setCurrentIndex(1)
+        elif until is not None: self.ends_combo.setCurrentIndex(2)
         self.ends_combo.currentIndexChanged.connect(self._sync_visibility)
         self.root.addWidget(self.ends_combo)
 
@@ -309,10 +291,8 @@ class RecurrenceDialog(BaseDialog):
         self.until_edit = QDateEdit()
         self.until_edit.setCalendarPopup(True)
         self.until_edit.setDisplayFormat("MMM d, yyyy")
-        if until:
-            self.until_edit.setDate(QDate(until.year, until.month, until.day))
-        else:
-            self.until_edit.setDate(QDate.currentDate().addMonths(3))
+        if until: self.until_edit.setDate(QDate(until.year, until.month, until.day))
+        else: self.until_edit.setDate(QDate.currentDate().addMonths(3))
         self.until_edit.setVisible(until is not None)
         ends_row.addWidget(self.until_edit)
         ends_row.addStretch(1)
@@ -336,8 +316,7 @@ class RecurrenceDialog(BaseDialog):
         remove = QPushButton("Remove recurrence")
         remove.setProperty("variant", "danger")
         remove.clicked.connect(self._remove)
-        if rule is not None:
-            buttons.addWidget(remove)
+        if rule is not None: buttons.addWidget(remove)
         save = QPushButton("Save recurrence")
         save.setProperty("variant", "primary")
         save.clicked.connect(self._validate)
@@ -345,8 +324,7 @@ class RecurrenceDialog(BaseDialog):
         buttons.addWidget(save)
         self.root.addLayout(buttons)
 
-        for check in self.day_checks.values():
-            check.toggled.connect(self._update_summary)
+        for check in self.day_checks.values(): check.toggled.connect(self._update_summary)
         self.interval.valueChanged.connect(self._update_summary)
         self.month_day.valueChanged.connect(self._update_summary)
         self.ends_combo.currentIndexChanged.connect(self._update_summary)
@@ -386,8 +364,7 @@ class RecurrenceDialog(BaseDialog):
         self._update_summary()
 
     def _update_summary(self) -> None:
-        if not hasattr(self, "summary"):
-            return
+        if not hasattr(self, "summary"): return
         frequency = self._frequency()
         interval = self.interval.value()
         days = [code for code, check in self.day_checks.items() if check.isChecked()]
@@ -399,23 +376,13 @@ class RecurrenceDialog(BaseDialog):
         }[frequency]
         text = f"Every {interval} {frequency_text}{'s' if interval != 1 else ''}"
         if frequency is RecurrenceFrequency.WEEKLY and days:
-            names = {
-                "MO": "Mon",
-                "TU": "Tue",
-                "WE": "Wed",
-                "TH": "Thu",
-                "FR": "Fri",
-                "SA": "Sat",
-                "SU": "Sun",
-            }
+            names = {"MO": "Mon", "TU": "Tue", "WE": "Wed", "TH": "Thu", "FR": "Fri", "SA": "Sat", "SU": "Sun"}
             text += " on " + ", ".join(names[day] for day in days)
         if frequency in (RecurrenceFrequency.MONTHLY, RecurrenceFrequency.YEARLY):
             text += f" on day {self.month_day.value()}"
         mode = self.ends_combo.currentData()
-        if mode == "count":
-            text += f", {self.count_spin.value()} occurrences"
-        elif mode == "until":
-            text += f", until {self.until_edit.date().toString('MMM d, yyyy')}"
+        if mode == "count": text += f", {self.count_spin.value()} occurrences"
+        elif mode == "until": text += f", until {self.until_edit.date().toString('MMM d, yyyy')}"
         if self._window_start and self._window_end:
             text += f" · {self._window_start:%H:%M}–{self._window_end:%H:%M}"
         self.summary.setText(text)
@@ -555,23 +522,14 @@ class AvailabilityDialog(BaseDialog):
         if initial:
             grouped: dict[tuple[int, int], set[int]] = {}
             for window in initial:
-                grouped.setdefault((window.start_minute, window.end_minute), set()).add(
-                    window.weekday
-                )
+                grouped.setdefault((window.start_minute, window.end_minute), set()).add(window.weekday)
             for (start, end), days in sorted(grouped.items()):
                 self._add_row(days=days, start=start, end=end)
-        if not self._rows:
-            self._add_row(days=set(range(7)))
+        if not self._rows: self._add_row(days=set(range(7)))
         self._sync_visibility()
         self._update_summary()
 
-    def _add_row(
-        self,
-        *,
-        days: set[int] | None = None,
-        start: int = 9 * 60,
-        end: int = 17 * 60,
-    ) -> None:
+    def _add_row(self, *, days: set[int] | None = None, start: int = 9 * 60, end: int = 17 * 60) -> None:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -605,12 +563,7 @@ class AvailabilityDialog(BaseDialog):
         remove.clicked.connect(lambda _=False, r=row: self._remove_row(r))
         layout.addWidget(remove)
         layout.addStretch(1)
-        entry = {
-            "widget": row,
-            "checks": checks,
-            "start": start_edit,
-            "end": end_edit,
-        }
+        entry = {"widget": row, "checks": checks, "start": start_edit, "end": end_edit}
         self._rows.append(entry)
         self.rows_layout.addWidget(row)
 
@@ -638,35 +591,28 @@ class AvailabilityDialog(BaseDialog):
             end = entry["end"].time()
             start_minute = start.hour() * 60 + start.minute()
             end_minute = end.hour() * 60 + end.minute()
-            if end_minute == 0:
-                end_minute = 24 * 60
-            for day in days:
-                windows.append(AvailabilityWindow(day, start_minute, end_minute))
+            if end_minute == 0: end_minute = 24 * 60
+            for day in days: windows.append(AvailabilityWindow(day, start_minute, end_minute))
         return normalize_availability_windows(windows)
 
     def _update_summary(self) -> None:
-        if not hasattr(self, "summary"):
-            return
+        if not hasattr(self, "summary"): return
         self.error_label.hide()
         if self.always.isChecked():
             self.summary.setText("24/7 — always available")
             return
-        try:
-            windows = self._window_values()
+        try: windows = self._window_values()
         except Exception as exc:  # noqa: BLE001 - user-facing validation text
             self.summary.setText(str(exc))
             return
-        self.summary.setText(
-            availability_summary(windows) if windows else "No availability windows configured."
-        )
+        self.summary.setText(availability_summary(windows) if windows else "No availability windows configured.")
 
     def _validate(self) -> None:
         if self.always.isChecked():
             self._values = []
             self.accept()
             return
-        try:
-            windows = self._window_values()
+        try: windows = self._window_values()
         except Exception as exc:
             self.error_label.setText(str(exc))
             self.error_label.show()
@@ -678,9 +624,7 @@ class AvailabilityDialog(BaseDialog):
         self._values = windows
         self.accept()
 
-    def values(self) -> list[AvailabilityWindow]:
-        return list(self._values)
-
+    def values(self) -> list[AvailabilityWindow]: return list(self._values)
 
 class ScheduleConflictDialog(BaseDialog):
     def __init__(self, conflicts: list[CalendarItem], parent: QWidget | None = None):
@@ -814,8 +758,7 @@ class CustomQueryDialog(BaseDialog):
             return
         self.accept()
 
-    def values(self) -> tuple[str, str]:
-        return self.label_edit.text().strip(), self.prompt_edit.toPlainText().strip()
+    def values(self) -> tuple[str, str]: return self.label_edit.text().strip(), self.prompt_edit.toPlainText().strip()
 
 class SchemaMismatchDialog(BaseDialog):
     def __init__(self, message: str, discrepancies: list[str], parent: QWidget | None = None):
@@ -843,7 +786,7 @@ class SchemaMismatchDialog(BaseDialog):
         self.root.addLayout(buttons)
 
 class DatabaseSetupDialog(BaseDialog):
-    """Dual-mode onboarding: admin provisioning plus low-privilege app role."""
+    """Single-step PostgreSQL setup: provisions schema and auto-generates the restricted app role."""
 
     def __init__(
         self,
@@ -856,11 +799,14 @@ class DatabaseSetupDialog(BaseDialog):
         super().__init__(
             parent,
             "Database setup",
-            "EFOS needs one-time administrative credentials to create the database "
-            "and schema, then a separate low-privilege application role for daily use.",
-            640,
+            "Connect to your PostgreSQL server to initialize the EFOS database. "
+            "EFOS automatically creates a restricted daily runtime role and stores "
+            "its credentials securely in Windows Credential Manager.",
+            560,
         )
         self.result_values: dict | None = None
+        self._default_app_user = app_user or "efos_app"
+        self._generated_app_password = secrets.token_urlsafe(32)
 
         connection = QWidget()
         grid = QGridLayout(connection)
@@ -883,42 +829,29 @@ class DatabaseSetupDialog(BaseDialog):
         admin_layout = QVBoxLayout(admin_frame)
         admin_layout.setContentsMargins(14, 12, 14, 12)
         admin_layout.setSpacing(6)
-        admin_title = QLabel("MODE A · ADMINISTRATIVE PROVISIONING")
+        admin_title = QLabel("POSTGRESQL ADMINISTRATOR")
         admin_title.setProperty("role", "sectionTitle")
         admin_layout.addWidget(admin_title)
         admin_row = QHBoxLayout()
         self.admin_user = QLineEdit("postgres")
         self.admin_password = QLineEdit()
         self.admin_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.admin_password.setPlaceholderText("one-time admin password")
+        self.admin_password.setPlaceholderText("postgres password")
         admin_row.addWidget(self.admin_user)
         admin_row.addWidget(self.admin_password)
         admin_layout.addLayout(admin_row)
-        self.admin_test = QPushButton("Test admin connection")
+        self.admin_test = QPushButton("Test connection")
         self.admin_test.clicked.connect(self._test_admin)
         admin_layout.addWidget(self.admin_test)
         self.root.addWidget(admin_frame)
 
-        app_frame = Card(flat=True)
-        app_layout = QVBoxLayout(app_frame)
-        app_layout.setContentsMargins(14, 12, 14, 12)
-        app_layout.setSpacing(6)
-        app_title = QLabel("MODE B · LOW-PRIVILEGE APPLICATION ROLE")
-        app_title.setProperty("role", "sectionTitle")
-        app_layout.addWidget(app_title)
-        app_row = QHBoxLayout()
-        self.app_user = QLineEdit(app_user)
-        self.app_user.setPlaceholderText("daily runtime role")
-        self.app_password = QLineEdit()
-        self.app_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.app_password.setPlaceholderText("app role password")
-        app_row.addWidget(self.app_user)
-        app_row.addWidget(self.app_password)
-        app_layout.addLayout(app_row)
-        self.app_test = QPushButton("Test app connection")
-        self.app_test.clicked.connect(self._test_app)
-        app_layout.addWidget(self.app_test)
-        self.root.addWidget(app_frame)
+        role_note = QLabel(
+            f"Daily runtime will automatically use a restricted '{self._default_app_user}' "
+            "database role with a generated secret stored in Windows Credential Manager."
+        )
+        role_note.setProperty("role", "faint")
+        role_note.setWordWrap(True)
+        self.root.addWidget(role_note)
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
@@ -933,35 +866,26 @@ class DatabaseSetupDialog(BaseDialog):
         self.init_button = QPushButton("Initialize database")
         self.init_button.setProperty("variant", "primary")
         self.init_button.clicked.connect(self._initialize)
+        self.init_button.setDefault(True)
         buttons.addWidget(self.init_button)
         self.root.addLayout(buttons)
+        self.admin_password.returnPressed.connect(self._initialize)
+        self.admin_password.setFocus()
         self.inspection = False
 
     def profiles(self) -> tuple[DbProfile, DbProfile]:
-        admin = DbProfile(
-            self.host_edit.text().strip(),
-            self.port_spin.value(),
-            self.admin_user.text().strip(),
-            self.admin_password.text(),
-            "postgres",
-        )
-        target = DbProfile(
-            self.host_edit.text().strip(),
-            self.port_spin.value(),
-            self.app_user.text().strip() or self.admin_user.text().strip(),
-            self.app_password.text() or self.admin_password.text(),
-            self.database_edit.text().strip(),
-        )
+        host = self.host_edit.text().strip()
+        port = self.port_spin.value()
+        admin_user = self.admin_user.text().strip()
+        app_user = self._default_app_user
+        if app_user == admin_user: app_user = f"{admin_user}_app"
+        admin = DbProfile(host, port, admin_user, self.admin_password.text(), "postgres")
+        target = DbProfile(host, port, app_user, self._generated_app_password, self.database_edit.text().strip())
         return admin, target
 
     def _test_admin(self) -> None:
         admin, _ = self.profiles()
         ok, message = test_connection(admin)
-        self._show_status(ok, message)
-
-    def _test_app(self) -> None:
-        _, target = self.profiles()
-        ok, message = test_connection(target)
         self._show_status(ok, message)
 
     def _show_status(self, ok: bool, message: str) -> None:
@@ -974,8 +898,8 @@ class DatabaseSetupDialog(BaseDialog):
         if not target.database:
             self._show_status(False, "Database name is required.")
             return
-        if not admin.password or not target.password:
-            self._show_status(False, "Both passwords are required.")
+        if not admin.password:
+            self._show_status(False, "PostgreSQL administrator password is required.")
             return
         self.init_button.setEnabled(False)
         self.status.setStyleSheet(f"color: {c('muted')}; font-size: 11px;")
@@ -992,7 +916,7 @@ class DatabaseSetupDialog(BaseDialog):
                 }
             )
             save_runtime_password(target.user, target.password)
-            self._show_status(True, "Database initialized and application role granted.")
+            self._show_status(True, "Database initialized and restricted application role granted.")
             self.result_values = {
                 "host": target.host,
                 "port": target.port,
@@ -1032,7 +956,6 @@ def confirm_dialog(
                 "padding: 6px 14px; }}"
             )
     cancel = box.button(QMessageBox.StandardButton.Cancel)
-    if cancel:
-        cancel.setText("Cancel")
+    if cancel: cancel.setText("Cancel")
     enable_native_title_bar(box)
     return box.exec() == QMessageBox.StandardButton.Ok
