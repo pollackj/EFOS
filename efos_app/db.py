@@ -14,18 +14,15 @@ Startup follows the specification exactly:
    is found. Destructive automatic recovery is never attempted.
 """
 from __future__ import annotations
-
 import logging
 import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
-
 import psycopg2
 from psycopg2 import errors as pg_errors
 from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor
-
 from .config import AppConfig, DbProfile, SCHEMA_VERSION, resource_path
 from .errors import (
     DatabaseConnectionError,
@@ -115,14 +112,7 @@ EFOS_REQUIRED_COLUMNS: dict[str, set[str]] = {
         "scheduled_start",
         "scheduled_end",
     },
-    "projects": {
-        "id",
-        "name",
-        "current_state",
-        "previous_state",
-        "resolution_conditions_unknown",
-        "created_at",
-    },
+    "projects": {"id", "name", "current_state", "previous_state", "resolution_conditions_unknown", "created_at"},
     "conditions": {"id", "display_name", "evaluation_state", "created_at"},
     "task_preconditions": {"task_id", "condition_id"},
     "project_preconditions": {"project_id", "condition_id"},
@@ -140,42 +130,13 @@ EFOS_REQUIRED_COLUMNS: dict[str, set[str]] = {
         "reset_minute",
         "last_reset_window",
     },
-    "task_availability_windows": {
-        "id",
-        "task_id",
-        "weekday",
-        "start_minute",
-        "end_minute",
-    },
+    "task_availability_windows": {"id", "task_id", "weekday", "start_minute", "end_minute"},
     "notes": {"id", "content", "updated_at"},
-    "events": {
-        "id",
-        "occurred_at",
-        "event_type",
-        "entity_type",
-        "entity_id",
-        "summary",
-        "details",
-    },
+    "events": {"id", "occurred_at", "event_type", "entity_type", "entity_id", "summary", "details"},
     "assistant_threads": {"id", "title", "created_at", "updated_at"},
     "assistant_messages": {"id", "thread_id", "role", "content", "metadata", "created_at"},
-    "custom_queries": {
-        "id",
-        "label",
-        "prompt",
-        "favorite",
-        "sort_index",
-        "created_at",
-        "updated_at",
-    },
-    "calendar_accounts": {
-        "id",
-        "calendar_id",
-        "last_sync_at",
-        "sync_token",
-        "sync_status",
-        "last_error",
-    },
+    "custom_queries": {"id", "label", "prompt", "favorite", "sort_index", "created_at", "updated_at"},
+    "calendar_accounts": {"id", "calendar_id", "last_sync_at", "sync_token", "sync_status", "last_error"},
     "calendar_events": {
         "id",
         "account_id",
@@ -225,7 +186,6 @@ COMMENT ON COLUMN public.task_availability_windows.start_minute IS 'Minutes afte
 COMMENT ON COLUMN public.task_availability_windows.end_minute IS 'Minutes after local midnight; exclusive, up to 1440 (midnight).';
 """
 
-
 def migrate_v2_0_to_v2_1(cur: Any, existing_tables: set[str]) -> bool:
     """Apply the additive 2.0.0 → 2.1.0 schema migration in the caller's transaction.
 
@@ -233,21 +193,14 @@ def migrate_v2_0_to_v2_1(cur: Any, existing_tables: set[str]) -> bool:
     is not the known 2.0.0 predecessor (the caller then validates or aborts as
     before). The migration never drops or recreates an existing table.
     """
-    if "task_availability_windows" in existing_tables:
-        return False
-    if set(existing_tables) != set(EFOS_TABLES_V2_0):
-        return False
+    if "task_availability_windows" in existing_tables: return False
+    if set(existing_tables) != set(EFOS_TABLES_V2_0): return False
     cur.execute("SELECT value FROM public.schema_meta WHERE key = 'schema_version'")
     row = cur.fetchone()
-    if not row or row[0] != SCHEMA_VERSION_V2_0:
-        return False
+    if not row or row[0] != SCHEMA_VERSION_V2_0: return False
     cur.execute(MIGRATION_2_1_0_SQL)
-    cur.execute(
-        "UPDATE public.schema_meta SET value = %s WHERE key = 'schema_version'",
-        (SCHEMA_VERSION,),
-    )
+    cur.execute("UPDATE public.schema_meta SET value = %s WHERE key = 'schema_version'", (SCHEMA_VERSION,))
     return True
-
 
 _FORBIDDEN_SQL = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|call|do|"
@@ -259,12 +212,9 @@ _FORBIDDEN_SQL = re.compile(
 _ALLOWED_START = re.compile(r"^\s*(select|with)\b", re.IGNORECASE | re.DOTALL)
 _LIMIT_RE = re.compile(r"\blimit\s+\d+\s*$", re.IGNORECASE)
 
-
 def quote_identifier(name: str) -> str:
-    if _IDENTIFIER.match(name):
-        return name
+    if _IDENTIFIER.match(name): return name
     return '"' + name.replace('"', '""') + '"'
-
 
 def _clean_db_error(exc: BaseException) -> str:
     text = str(exc).strip().replace("\n", " ")
@@ -272,11 +222,9 @@ def _clean_db_error(exc: BaseException) -> str:
     text = re.sub(r"(postgres(?:ql)?://)[^\s]+", r"\1***", text)
     return text[:420]
 
-
 def schema_sql_text() -> str:
     path = resource_path("efos_app/sql/schema.sql")
-    if not path.is_file():
-        raise SchemaValidationError(f"Bundled schema was not found at {path}.")
+    if not path.is_file(): raise SchemaValidationError(f"Bundled schema was not found at {path}.")
     text = path.read_text(encoding="utf-8")
     # psql meta-commands are not SQL; the canonical file is pure SQL, but strip
     # defensively so a stray backslash line cannot break psycopg2.
@@ -285,12 +233,9 @@ def schema_sql_text() -> str:
 
 
 def connect_target(profile: DbProfile, timeout: int = 5) -> Any:
-    try:
-        return psycopg2.connect(profile.dsn(timeout=timeout))
+    try: return psycopg2.connect(profile.dsn(timeout=timeout))
     except psycopg2.Error as exc:
-        raise DatabaseConnectionError(
-            f"PostgreSQL at {profile.display} is unreachable: {_clean_db_error(exc)}"
-        ) from exc
+        raise DatabaseConnectionError(f"PostgreSQL at {profile.display} is unreachable: {_clean_db_error(exc)}") from exc
 
 
 def test_connection(profile: DbProfile) -> tuple[bool, str]:
@@ -300,17 +245,13 @@ def test_connection(profile: DbProfile) -> tuple[bool, str]:
             with conn.cursor() as cur:
                 cur.execute("SELECT current_user, current_database()")
                 user, database = cur.fetchone()
-        finally:
-            conn.close()
+        finally: conn.close()
         return True, f"Connected as {user} to {database}."
-    except psycopg2.Error as exc:
-        return False, _clean_db_error(exc)
-
+    except psycopg2.Error as exc: return False, _clean_db_error(exc)
 
 def provision_database(admin: DbProfile, target: DbProfile) -> None:
     """First-launch setup used by the guided onboarding wizard."""
     ensure_database(None, admin_profile=admin, target_profile=target)
-
 
 def _migrate_existing_schema(profile: DbProfile, target: DbProfile) -> bool:
     """Run the additive 2.0.0 → 2.1.0 migration on an existing database."""
@@ -333,23 +274,17 @@ def _migrate_existing_schema(profile: DbProfile, target: DbProfile) -> bool:
         conn.commit()
         return migrated
     except Exception:
-        try:
-            conn.rollback()
-        except psycopg2.Error:
-            pass
+        try: conn.rollback()
+        except psycopg2.Error: pass
         raise
-    finally:
-        conn.close()
+    finally: conn.close()
 
 
 def _verify_target(target: DbProfile) -> None:
     conn = psycopg2.connect(target.dsn())
     try:
-        with conn.cursor() as cur:
-            verify_schema(cur)
-    finally:
-        conn.close()
-
+        with conn.cursor() as cur: verify_schema(cur)
+    finally: conn.close()
 
 def ensure_database(
     config: AppConfig | None = None,
@@ -365,19 +300,15 @@ def ensure_database(
     """
     admin = admin_profile or (config.admin_profile if config else None)
     target = target_profile or (config.profile if config else None)
-    if admin is None or target is None:
-        raise DatabaseConnectionError("A database connection profile is required.")
+    if admin is None or target is None: raise DatabaseConnectionError("A database connection profile is required.")
 
     # Daily app-mode fast path: an initialized database is verified with the
     # low-privilege application role. Administrative credentials are only needed
     # for first-launch provisioning, schema creation, or privilege grants.
     empty_confirmed = False
-    try:
-        probe = psycopg2.connect(target.dsn())
-    except pg_errors.InvalidCatalogName:
-        probe = None
-    except psycopg2.Error:
-        probe = None
+    try: probe = psycopg2.connect(target.dsn())
+    except pg_errors.InvalidCatalogName: probe = None
+    except psycopg2.Error: probe = None
     if probe is not None:
         try:
             with probe.cursor() as cur:
@@ -392,8 +323,7 @@ def ensure_database(
                 )
                 existing = {row[0] for row in cur.fetchall()}
             if existing == EFOS_TABLES:
-                with probe.cursor() as cur:
-                    verify_schema(cur)
+                with probe.cursor() as cur: verify_schema(cur)
                 probe.close()
                 return
             if existing == EFOS_TABLES_V2_0:
@@ -402,11 +332,7 @@ def ensure_database(
                 # the runtime role is intentionally low-privilege.
                 probe.close()
                 profiles = [target]
-                if (admin.user, admin.host, admin.port) != (
-                    target.user,
-                    target.host,
-                    target.port,
-                ):
+                if (admin.user, admin.host, admin.port) != (target.user, target.host, target.port):
                     profiles.append(admin)
                 last_error: str = ""
                 migrated = False
@@ -414,8 +340,7 @@ def ensure_database(
                 for profile in profiles:
                     try:
                         migrated = _migrate_existing_schema(profile, target)
-                        if migrated:
-                            migration_profile = profile
+                        if migrated: migration_profile = profile
                         break
                     except pg_errors.InsufficientPrivilege as exc:
                         last_error = _clean_db_error(exc)
@@ -458,14 +383,11 @@ def ensure_database(
             probe.close()
             raise
         except psycopg2.Error:
-            try:
-                probe.close()
-            except psycopg2.Error:
-                pass
+            try: probe.close()
+            except psycopg2.Error: pass
 
     # 1-2. Maintenance connection to the server default database.
-    try:
-        maintenance = psycopg2.connect(admin.maintenance_dsn())
+    try: maintenance = psycopg2.connect(admin.maintenance_dsn())
     except psycopg2.Error as exc:
         if empty_confirmed:
             raise ProvisioningRequiredError(
@@ -484,8 +406,7 @@ def ensure_database(
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target.database,))
             exists = cur.fetchone() is not None
             if not exists:
-                try:
-                    cur.execute(f"CREATE DATABASE {quote_identifier(target.database)}")
+                try: cur.execute(f"CREATE DATABASE {quote_identifier(target.database)}")
                 except pg_errors.InsufficientPrivilege as exc:
                     raise ProvisioningRequiredError(
                         "The configured PostgreSQL role does not have CREATEDB "
@@ -494,20 +415,14 @@ def ensure_database(
                         "role for daily use."
                     ) from exc
                 created = True
-    finally:
-        maintenance.close()
+    finally: maintenance.close()
 
     # 5. Reconnect to the target and inspect/initialize the schema.
-    try:
-        conn = psycopg2.connect(admin.dsn(database=target.database))
+    try: conn = psycopg2.connect(admin.dsn(database=target.database))
     except pg_errors.InvalidCatalogName as exc:
-        raise DatabaseConnectionError(
-            f"The target database {target.database!r} could not be opened."
-        ) from exc
+        raise DatabaseConnectionError(f"The target database {target.database!r} could not be opened.") from exc
     except psycopg2.Error as exc:
-        raise DatabaseConnectionError(
-            f"PostgreSQL at {target.display} refused the connection: {_clean_db_error(exc)}"
-        ) from exc
+        raise DatabaseConnectionError(f"PostgreSQL at {target.display} refused the connection: {_clean_db_error(exc)}") from exc
 
     try:
         conn.autocommit = False
@@ -542,22 +457,15 @@ def ensure_database(
         raise
     except psycopg2.Error as exc:
         conn.rollback()
-        raise DatabaseConnectionError(
-            f"Schema initialization failed at {target.display}: {_clean_db_error(exc)}"
-        ) from exc
-    finally:
-        conn.close()
+        raise DatabaseConnectionError(f"Schema initialization failed at {target.display}: {_clean_db_error(exc)}") from exc
+    finally: conn.close()
 
     # 10.3 Mode B: grant only routine DML to the low-privilege application role.
-    if target.user != admin.user:
-        _grant_application_role(admin, target, created=created)
-
+    if target.user != admin.user: _grant_application_role(admin, target, created=created)
 
 def _grant_application_role(admin: DbProfile, target: DbProfile, *, created: bool) -> None:
-    try:
-        conn = psycopg2.connect(admin.dsn(database=target.database))
-    except psycopg2.Error as exc:
-        raise DatabaseConnectionError(_clean_db_error(exc)) from exc
+    try: conn = psycopg2.connect(admin.dsn(database=target.database))
+    except psycopg2.Error as exc: raise DatabaseConnectionError(_clean_db_error(exc)) from exc
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -584,12 +492,8 @@ def _grant_application_role(admin: DbProfile, target: DbProfile, *, created: boo
             role = quote_identifier(target.user)
             cur.execute(f"GRANT CONNECT ON DATABASE {quote_identifier(target.database)} TO {role}")
             cur.execute(f"GRANT USAGE ON SCHEMA public TO {role}")
-            cur.execute(
-                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}"
-            )
-            cur.execute(
-                f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role}"
-            )
+            cur.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}")
+            cur.execute(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role}")
             cur.execute(
                 f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
                 f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role}"
@@ -598,16 +502,13 @@ def _grant_application_role(admin: DbProfile, target: DbProfile, *, created: boo
                 f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
                 f"GRANT USAGE, SELECT ON SEQUENCES TO {role}"
             )
-    except ProvisioningRequiredError:
-        raise
+    except ProvisioningRequiredError: raise
     except psycopg2.Error as exc:
         raise DatabaseConnectionError(
             "Could not grant routine privileges to the application role: "
             f"{_clean_db_error(exc)}"
         ) from exc
-    finally:
-        conn.close()
-
+    finally: conn.close()
 
 def verify_schema(cur: Any) -> None:
     discrepancies: list[str] = []
@@ -621,8 +522,7 @@ def verify_schema(cur: Any) -> None:
         (sorted(EFOS_TABLES),),
     )
     found = {row[0] for row in cur.fetchall()}
-    for table in sorted(EFOS_TABLES - found):
-        discrepancies.append(f"Missing table: public.{table}")
+    for table in sorted(EFOS_TABLES - found): discrepancies.append(f"Missing table: public.{table}")
 
     if not discrepancies:
         cur.execute(
@@ -637,10 +537,7 @@ def verify_schema(cur: Any) -> None:
         )
         enums = {row[0]: list(row[1]) for row in cur.fetchall()}
         for name, labels in EFOS_ENUMS.items():
-            if enums.get(name) != labels:
-                discrepancies.append(
-                    f"Enum public.{name} is {enums.get(name)!r}; expected {labels!r}"
-                )
+            if enums.get(name) != labels: discrepancies.append(f"Enum public.{name} is {enums.get(name)!r}; expected {labels!r}")
 
         cur.execute(
             """
@@ -652,31 +549,22 @@ def verify_schema(cur: Any) -> None:
             (sorted(EFOS_REQUIRED_COLUMNS),),
         )
         columns: dict[str, set[str]] = {}
-        for table, column in cur.fetchall():
-            columns.setdefault(table, set()).add(column)
+        for table, column in cur.fetchall(): columns.setdefault(table, set()).add(column)
         for table, required in EFOS_REQUIRED_COLUMNS.items():
-            if table not in found:
-                continue
+            if table not in found: continue
             missing = sorted(required - columns.get(table, set()))
-            for column in missing:
-                discrepancies.append(f"Missing column: public.{table}.{column}")
+            for column in missing: discrepancies.append(f"Missing column: public.{table}.{column}")
 
-        cur.execute(
-            "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"
-        )
+        cur.execute("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal")
         triggers = {row[0] for row in cur.fetchall()}
-        for trigger in sorted(EFOS_TRIGGERS - triggers):
-            discrepancies.append(f"Missing trigger: {trigger}")
+        for trigger in sorted(EFOS_TRIGGERS - triggers): discrepancies.append(f"Missing trigger: {trigger}")
 
         cur.execute("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
         indexes = {row[0] for row in cur.fetchall()}
-        for index in sorted(EFOS_INDEXES - indexes):
-            discrepancies.append(f"Missing index: {index}")
+        for index in sorted(EFOS_INDEXES - indexes): discrepancies.append(f"Missing index: {index}")
 
         try:
-            cur.execute(
-                "SELECT value FROM public.schema_meta WHERE key = 'schema_version'"
-            )
+            cur.execute("SELECT value FROM public.schema_meta WHERE key = 'schema_version'")
             row = cur.fetchone()
             if not row or row[0] != SCHEMA_VERSION:
                 discrepancies.append(
@@ -694,7 +582,6 @@ def verify_schema(cur: Any) -> None:
             "attempted. The validation report is below.",
             discrepancies,
         )
-
 
 class Database:
     """Thread-safe pool with explicit startup validation."""
@@ -715,17 +602,12 @@ class Database:
         self._bootstrapped = False
 
     @property
-    def display(self) -> str:
-        return self.profile.display
+    def display(self) -> str: return self.profile.display
 
     def connect(self) -> None:
-        if self._pool is not None:
-            return
+        if self._pool is not None: return
         self.bootstrap()
-        try:
-            self._pool = pool.ThreadedConnectionPool(
-                self._minconn, self._maxconn, dsn=self.profile.dsn()
-            )
+        try: self._pool = pool.ThreadedConnectionPool(self._minconn, self._maxconn, dsn=self.profile.dsn())
         except psycopg2.Error as exc:
             raise DatabaseConnectionError(
                 f"PostgreSQL at {self.profile.display} is unreachable: "
@@ -733,22 +615,15 @@ class Database:
             ) from exc
 
     def bootstrap(self) -> None:
-        if self._bootstrapped:
-            return
-        ensure_database(
-            self.config,
-            admin_profile=self.config.admin_profile,
-            target_profile=self.profile,
-        )
+        if self._bootstrapped: return
+        ensure_database(self.config, admin_profile=self.config.admin_profile, target_profile=self.profile)
         self._bootstrapped = True
 
     @contextmanager
     def connection(self) -> Iterator[Any]:
-        if self._pool is None:
-            self.connect()
+        if self._pool is None: self.connect()
         assert self._pool is not None
-        try:
-            conn = self._pool.getconn()
+        try: conn = self._pool.getconn()
         except psycopg2.Error as exc:
             raise DatabaseConnectionError(
                 f"PostgreSQL at {self.profile.display} is unreachable: "
@@ -759,28 +634,20 @@ class Database:
             yield conn
             conn.commit()
         except Exception:
-            try:
-                conn.rollback()
-            except psycopg2.Error:
-                pass
+            try: conn.rollback()
+            except psycopg2.Error: pass
             raise
         finally:
-            try:
-                self._pool.putconn(conn)
-            except psycopg2.Error:
-                pass
+            try: self._pool.putconn(conn)
+            except psycopg2.Error: pass
 
-    def fetch_all(
-        self, sql: str, params: Sequence[Any] | None = None
-    ) -> list[dict[str, Any]]:
+    def fetch_all(self, sql: str, params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
         with self.connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
                 return [dict(row) for row in cur.fetchall()]
 
-    def fetch_one(
-        self, sql: str, params: Sequence[Any] | None = None
-    ) -> dict[str, Any] | None:
+    def fetch_one(self, sql: str, params: Sequence[Any] | None = None) -> dict[str, Any] | None:
         with self.connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
@@ -793,9 +660,7 @@ class Database:
                 cur.execute(sql, params)
                 return cur.rowcount
 
-    def execute_returning(
-        self, sql: str, params: Sequence[Any] | None = None
-    ) -> dict[str, Any] | None:
+    def execute_returning(self, sql: str, params: Sequence[Any] | None = None) -> dict[str, Any] | None:
         with self.connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
@@ -817,14 +682,8 @@ class Database:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
                     cur.fetchone()
-            finally:
-                conn.close()
-            return ConnectionStatus(
-                True,
-                self.profile.host,
-                self.profile.port,
-                self.profile.database,
-            )
+            finally: conn.close()
+            return ConnectionStatus(True, self.profile.host, self.profile.port, self.profile.database)
         except psycopg2.Error as exc:
             return ConnectionStatus(
                 False,
@@ -839,9 +698,7 @@ class Database:
     ) -> tuple[list[str], list[dict[str, Any]]]:
         validated = validate_readonly_sql(sql)
         limited = _LIMIT_RE.sub("", validated).rstrip().rstrip(";")
-        wrapped = (
-            f"SELECT * FROM (\n{limited}\n) AS efos_rag_result LIMIT {int(max_rows)}"
-        )
+        wrapped = (f"SELECT * FROM (\n{limited}\n) AS efos_rag_result LIMIT {int(max_rows)}")
         with self.connection() as conn:
             previous = conn.autocommit
             conn.autocommit = False
@@ -857,42 +714,29 @@ class Database:
             except psycopg2.Error:
                 conn.rollback()
                 raise
-            finally:
-                conn.autocommit = previous
+            finally: conn.autocommit = previous
 
     def close(self) -> None:
         if self._pool is not None:
-            try:
-                self._pool.closeall()
-            except Exception:
-                pass
+            try: self._pool.closeall()
+            except Exception: pass
             self._pool = None
             self._bootstrapped = False
 
-
 def validate_readonly_sql(sql: str) -> str:
-    if not isinstance(sql, str):
-        raise ReadOnlyQueryError("Generated SQL was not text.")
+    if not isinstance(sql, str): raise ReadOnlyQueryError("Generated SQL was not text.")
     cleaned = sql.strip()
-    if not cleaned:
-        raise ReadOnlyQueryError("Generated SQL was empty.")
-    if len(cleaned) > 12000:
-        raise ReadOnlyQueryError("Generated SQL exceeded the safety size limit.")
+    if not cleaned: raise ReadOnlyQueryError("Generated SQL was empty.")
+    if len(cleaned) > 12000: raise ReadOnlyQueryError("Generated SQL exceeded the safety size limit.")
     without_block = re.sub(r"/\*.*?\*/", " ", cleaned, flags=re.DOTALL)
     without_line = re.sub(r"--[^\n]*", " ", without_block)
-    if "/*" in without_line or "*/" in without_line:
-        raise ReadOnlyQueryError("Malformed SQL comments were rejected.")
+    if "/*" in without_line or "*/" in without_line: raise ReadOnlyQueryError("Malformed SQL comments were rejected.")
     normalized = without_line.strip()
-    if ";" in normalized.rstrip(";"):
-        raise ReadOnlyQueryError("Only a single SQL statement is permitted.")
+    if ";" in normalized.rstrip(";"): raise ReadOnlyQueryError("Only a single SQL statement is permitted.")
     normalized = normalized.rstrip(";").strip()
-    if not _ALLOWED_START.match(normalized):
-        raise ReadOnlyQueryError("Only SELECT or WITH queries are permitted.")
+    if not _ALLOWED_START.match(normalized): raise ReadOnlyQueryError("Only SELECT or WITH queries are permitted.")
     forbidden = _FORBIDDEN_SQL.search(normalized)
-    if forbidden:
-        raise ReadOnlyQueryError(
-            f"The token “{forbidden.group(0).upper()}” is not permitted in a read-only query."
-        )
+    if forbidden: raise ReadOnlyQueryError(f"The token “{forbidden.group(0).upper()}” is not permitted in a read-only query.")
     lower = normalized.lower()
     if any(
         token in lower

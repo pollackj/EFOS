@@ -1,21 +1,9 @@
 """Small, dependency-free line icon set drawn with QPainter."""
 from __future__ import annotations
-
 import math
-
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import (
-    QColor,
-    QIcon,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QPixmap,
-    QPolygonF,
-)
-
+from PyQt6.QtGui import (QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from .theme import c
-
 
 def icon(name: str, color: str | None = None, size: int = 18) -> QIcon:
     color = color or c("muted")
@@ -35,26 +23,18 @@ def icon(name: str, color: str | None = None, size: int = 18) -> QIcon:
         result.addPixmap(pix, mode, QIcon.State.Off)
     return result
 
-
 def draw_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
     painter.save()
     scale = rect.width() / 24.0
     painter.translate(rect.topLeft())
     painter.scale(scale, scale)
-    pen = QPen(
-        QColor(color),
-        1.8,
-        Qt.PenStyle.SolidLine,
-        Qt.PenCapStyle.RoundCap,
-        Qt.PenJoinStyle.RoundJoin,
-    )
+    pen = QPen(QColor(color), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
     name = name.replace("nav_", "")
 
     if name == "grid":
-        for x, y in ((4, 4), (13, 4), (4, 13), (13, 13)):
-            painter.drawRoundedRect(QRectF(x, y, 7, 7), 2, 2)
+        for x, y in ((4, 4), (13, 4), (4, 13), (13, 13)): painter.drawRoundedRect(QRectF(x, y, 7, 7), 2, 2)
     elif name == "flow":
         painter.drawEllipse(QPointF(5, 12), 2.4, 2.4)
         painter.drawEllipse(QPointF(19, 6), 2.4, 2.4)
@@ -88,8 +68,7 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
     elif name == "plus":
         painter.drawLine(QPointF(12, 5), QPointF(12, 19))
         painter.drawLine(QPointF(5, 12), QPointF(19, 12))
-    elif name == "minus":
-        painter.drawLine(QPointF(5, 12), QPointF(19, 12))
+    elif name == "minus": painter.drawLine(QPointF(5, 12), QPointF(19, 12))
     elif name == "refresh":
         rect_arc = QRectF(4.5, 4.5, 15, 15)
         painter.drawArc(rect_arc, 30 * 16, 280 * 16)
@@ -107,17 +86,13 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
     elif name == "close":
         painter.drawLine(QPointF(6, 6), QPointF(18, 18))
         painter.drawLine(QPointF(18, 6), QPointF(6, 18))
-    elif name == "chevron_down":
-        painter.drawPolyline(QPolygonF([QPointF(6, 9), QPointF(12, 15), QPointF(18, 9)]))
-    elif name == "chevron_right":
-        painter.drawPolyline(QPolygonF([QPointF(9, 6), QPointF(15, 12), QPointF(9, 18)]))
-    elif name == "chevron_left":
-        painter.drawPolyline(QPolygonF([QPointF(15, 6), QPointF(9, 12), QPointF(15, 18)]))
+    elif name == "chevron_down": painter.drawPolyline(QPolygonF([QPointF(6, 9), QPointF(12, 15), QPointF(18, 9)]))
+    elif name == "chevron_right": painter.drawPolyline(QPolygonF([QPointF(9, 6), QPointF(15, 12), QPointF(9, 18)]))
+    elif name == "chevron_left": painter.drawPolyline(QPolygonF([QPointF(15, 6), QPointF(9, 12), QPointF(15, 18)]))
     elif name == "search":
         painter.drawEllipse(QPointF(10.5, 10.5), 6, 6)
         painter.drawLine(QPointF(15, 15), QPointF(20, 20))
-    elif name == "check":
-        painter.drawPolyline(QPolygonF([QPointF(5, 12.5), QPointF(10, 17), QPointF(19.5, 7)]))
+    elif name == "check": painter.drawPolyline(QPolygonF([QPointF(5, 12.5), QPointF(10, 17), QPointF(19.5, 7)]))
     elif name == "alert":
         path = QPainterPath(QPointF(12, 3.5))
         path.lineTo(22, 20.5)
@@ -193,6 +168,14 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
         painter.drawRoundedRect(QRectF(14.5, 4.5, 6, 6), 1.5, 1.5)
         painter.drawRoundedRect(QRectF(3.5, 14.5, 6, 6), 1.5, 1.5)
         painter.drawRoundedRect(QRectF(14.5, 14.5, 6, 6), 1.5, 1.5)
+    elif name == "align_start":
+        painter.drawLine(QPointF(3.5, 3.5), QPointF(3.5, 20.5))
+        painter.drawRoundedRect(QRectF(7.0, 5.0, 13.5, 5.5), 1.5, 1.5)
+        painter.drawRoundedRect(QRectF(7.0, 13.5, 9.0, 5.5), 1.5, 1.5)
+    elif name == "align_finish":
+        painter.drawLine(QPointF(20.5, 3.5), QPointF(20.5, 20.5))
+        painter.drawRoundedRect(QRectF(3.5, 5.0, 13.5, 5.5), 1.5, 1.5)
+        painter.drawRoundedRect(QRectF(8.0, 13.5, 9.0, 5.5), 1.5, 1.5)
     elif name == "zoom_in":
         painter.drawEllipse(QPointF(10.5, 10.5), 6, 6)
         painter.drawLine(QPointF(15, 15), QPointF(20, 20))
@@ -241,8 +224,7 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
         painter.drawLine(QPointF(4, 12), QPointF(20, 12))
         painter.drawPolyline(QPolygonF([QPointF(14, 6), QPointF(20, 12), QPointF(14, 18)]))
     elif name == "more":
-        for x in (6, 12, 18):
-            painter.drawEllipse(QPointF(x, 12), 1.2, 1.2)
+        for x in (6, 12, 18): painter.drawEllipse(QPointF(x, 12), 1.2, 1.2)
     elif name == "lock":
         painter.drawRoundedRect(QRectF(5, 10, 14, 10), 2, 2)
         painter.drawArc(QRectF(8, 4, 8, 12), 0, 180 * 16)
@@ -310,10 +292,8 @@ def draw_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
         painter.drawRoundedRect(QRectF(3.5, 5, 17, 14), 2, 2)
         painter.drawEllipse(QPointF(8.5, 9.5), 1.5, 1.5)
         painter.drawPolyline(QPolygonF([QPointF(5, 17), QPointF(10, 12), QPointF(14, 16), QPointF(17, 13), QPointF(20, 16)]))
-    else:
-        painter.drawEllipse(QPointF(12, 12), 7, 7)
+    else: painter.drawEllipse(QPointF(12, 12), 7, 7)
     painter.restore()
-
 
 def brand_pixmap(size: int = 64) -> QPixmap:
     pix = QPixmap(size, size)
@@ -337,7 +317,6 @@ def brand_pixmap(size: int = 64) -> QPixmap:
     painter.drawEllipse(QPointF(45, 21), 6.5, 6.5)
     painter.end()
     return pix
-
 
 def dotted_line_pixmap(width: int = 120, height: int = 12) -> QPixmap:
     """Colored dotted-line graphic used in the EFOS brand lockup."""

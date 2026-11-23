@@ -5,17 +5,14 @@ ledger runs inside one explicit transaction. ``public.events`` is only ever
 appended to; this module deliberately exposes no update or delete method for it.
 """
 from __future__ import annotations
-
 import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 from uuid import UUID
-
 import psycopg2
 from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json
-
 from .db import Database
 from .errors import NotFoundError, ValidationError
 from .logic import availability_summary, normalize_availability_windows
@@ -50,38 +47,30 @@ _JUNCTION = {
 }
 
 def as_uuid(value: str, label: str = "identifier") -> str:
-    try:
-        return str(UUID(str(value)))
+    try: return str(UUID(str(value)))
     except (ValueError, AttributeError, TypeError) as exc:
         raise ValidationError(f"Invalid {label}: expected a UUID.") from exc
 
 def clean_name(value: str, *, label: str = "Name") -> str:
     text = (value or "").strip()
-    if not text:
-        raise ValidationError(f"{label} cannot be empty.")
-    if len(text) > 255:
-        raise ValidationError(f"{label} must be 255 characters or fewer.")
+    if not text: raise ValidationError(f"{label} cannot be empty.")
+    if len(text) > 255: raise ValidationError(f"{label} must be 255 characters or fewer.")
     return text
 
 def _naive_local(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is not None:
-        value = value.astimezone().replace(tzinfo=None)
+    if value is None: return None
+    if value.tzinfo is not None: value = value.astimezone().replace(tzinfo=None)
     return value.replace(microsecond=0)
 
 def _schedule(
     start: datetime | None, end: datetime | None
 ) -> tuple[datetime | None, datetime | None]:
-    if start is None and end is None:
-        return None, None
-    if start is None or end is None:
-        raise ValidationError("A schedule requires both a start and an end time.")
+    if start is None and end is None: return None, None
+    if start is None or end is None: raise ValidationError("A schedule requires both a start and an end time.")
     start = _naive_local(start)
     end = _naive_local(end)
     assert start is not None and end is not None
-    if start >= end:
-        raise ValidationError("The schedule end must be after its start.")
+    if start >= end: raise ValidationError("The schedule end must be after its start.")
     return start, end
 
 def _rule_from_row(row: dict[str, Any]) -> RecurrenceRule:
@@ -189,11 +178,7 @@ class Repository:
                 )
             )
         for row in self.db.fetch_all("SELECT * FROM public.tasks ORDER BY created_at NULLS LAST, name"):
-            task = _task_from_row(
-                row,
-                rules.get(str(row["id"])),
-                availability.get(str(row["id"]), []),
-            )
+            task = _task_from_row(row, rules.get(str(row["id"])), availability.get(str(row["id"]), []))
             snapshot.tasks[task.id] = task
         for row in self.db.fetch_all("SELECT * FROM public.projects ORDER BY created_at NULLS LAST, name"):
             project = _project_from_row(row)
@@ -224,8 +209,7 @@ class Repository:
     def get_task(self, task_id: str) -> Task:
         task_id = as_uuid(task_id, "task id")
         row = self.db.fetch_one("SELECT * FROM public.tasks WHERE id = %s::uuid", (task_id,))
-        if not row:
-            raise NotFoundError("The task no longer exists.")
+        if not row: raise NotFoundError("The task no longer exists.")
         rule_row = self.db.fetch_one("SELECT * FROM public.task_recurrence_rules WHERE task_id = %s::uuid", (task_id,))
         availability_rows = self.db.fetch_all(
             "SELECT weekday, start_minute, end_minute "
@@ -241,24 +225,18 @@ class Repository:
             )
             for item in availability_rows
         ]
-        return _task_from_row(
-            row,
-            _rule_from_row(rule_row) if rule_row else None,
-            availability,
-        )
+        return _task_from_row(row, _rule_from_row(rule_row) if rule_row else None, availability)
 
     def get_project(self, project_id: str) -> Project:
         project_id = as_uuid(project_id, "project id")
         row = self.db.fetch_one("SELECT * FROM public.projects WHERE id = %s::uuid", (project_id,))
-        if not row:
-            raise NotFoundError("The project no longer exists.")
+        if not row: raise NotFoundError("The project no longer exists.")
         return _project_from_row(row)
 
     def get_condition(self, condition_id: str) -> Condition:
         condition_id = as_uuid(condition_id, "condition id")
         row = self.db.fetch_one("SELECT * FROM public.conditions WHERE id = %s::uuid", (condition_id,))
-        if not row:
-            raise NotFoundError("The condition no longer exists.")
+        if not row: raise NotFoundError("The condition no longer exists.")
         return _condition_from_row(row)
 
     def get_rule(self, task_id: str) -> RecurrenceRule | None:
@@ -319,8 +297,7 @@ class Repository:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT note_id FROM public.{table} WHERE {column} = %s::uuid", (entity_id,))
                 row = cur.fetchone()
-                if not row:
-                    return
+                if not row: return
                 note_id = str(row[0])
                 cur.execute(
                     f"DELETE FROM public.{table} WHERE {column} = %s::uuid",
@@ -350,8 +327,7 @@ class Repository:
         details: dict[str, Any] | None = None,
     ) -> None:
         with self.db.connection() as conn:
-            with conn.cursor() as cur:
-                _insert_event(cur, event_type, entity_type, entity_id, summary, details)
+            with conn.cursor() as cur: _insert_event(cur, event_type, entity_type, entity_id, summary, details)
 
     def list_events(self, limit: int = 200) -> list[dict[str, Any]]:
         return self.db.fetch_all(
@@ -404,8 +380,7 @@ class Repository:
                     (name, bool(is_recurring), task_id),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 _insert_event(
                     cur,
                     "task.updated",
@@ -426,8 +401,7 @@ class Repository:
                     (start, end, task_id),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 if start is not None and end is not None:
                     cur.execute(
                         """
@@ -476,9 +450,7 @@ class Repository:
                         tuple(params),
                     )
                 except pg_errors.CheckViolation as exc:
-                    raise ValidationError(
-                        "The database state machine rejected this task transition."
-                    ) from exc
+                    raise ValidationError("The database state machine rejected this task transition.") from exc
                 row = cur.fetchone()
                 if not row:
                     raise NotFoundError(
@@ -493,11 +465,7 @@ class Repository:
                     "task",
                     task_id,
                     f"{name}: {previous} → {target.value}",
-                    {
-                        "previous": str(previous),
-                        "current": target.value,
-                        "reason": reason,
-                    },
+                    {"previous": str(previous), "current": target.value, "reason": reason},
                 )
 
     def delete_task(self, task_id: str) -> None:
@@ -506,14 +474,12 @@ class Repository:
             with conn.cursor() as cur:
                 cur.execute("SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 name = row[0]
                 cur.execute("SELECT note_id FROM public.task_notes WHERE task_id = %s::uuid", (task_id,))
                 note_ids = [str(item[0]) for item in cur.fetchall()]
                 cur.execute("DELETE FROM public.task_notes WHERE task_id = %s::uuid", (task_id,))
-                if note_ids:
-                    cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
+                if note_ids: cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
                 cur.execute("DELETE FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 _insert_event(
                     cur,
@@ -559,8 +525,7 @@ class Repository:
                     "RETURNING name",
                     (name, project_id),
                 )
-                if not cur.fetchone():
-                    raise NotFoundError("The project no longer exists.")
+                if not cur.fetchone(): raise NotFoundError("The project no longer exists.")
                 _insert_event(cur, "project.updated", "project", project_id, f"Project renamed: {name}", {"name": name})
 
     def transition_project(
@@ -604,11 +569,7 @@ class Repository:
                     "project",
                     project_id,
                     f"{name}: {previous} → {target.value}",
-                    {
-                        "previous": str(previous),
-                        "current": target.value,
-                        "reason": reason,
-                    },
+                    {"previous": str(previous), "current": target.value, "reason": reason},
                 )
 
     def delete_project(self, project_id: str) -> None:
@@ -617,14 +578,12 @@ class Repository:
             with conn.cursor() as cur:
                 cur.execute("SELECT name FROM public.projects WHERE id = %s::uuid", (project_id,))
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The project no longer exists.")
+                if not row: raise NotFoundError("The project no longer exists.")
                 name = row[0]
                 cur.execute("SELECT note_id FROM public.project_notes WHERE project_id = %s::uuid", (project_id,))
                 note_ids = [str(item[0]) for item in cur.fetchall()]
                 cur.execute("DELETE FROM public.project_notes WHERE project_id = %s::uuid", (project_id,))
-                if note_ids:
-                    cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
+                if note_ids: cur.execute("DELETE FROM public.notes WHERE id = ANY(%s::uuid[])", (note_ids,))
                 cur.execute("DELETE FROM public.projects WHERE id = %s::uuid", (project_id,))
                 _insert_event(
                     cur,
@@ -666,18 +625,14 @@ class Repository:
                     "WHERE id = %s::uuid RETURNING display_name",
                     (display_name, evaluation_state, condition_id),
                 )
-                if not cur.fetchone():
-                    raise NotFoundError("The condition no longer exists.")
+                if not cur.fetchone(): raise NotFoundError("The condition no longer exists.")
                 _insert_event(
                     cur,
                     "condition.updated",
                     "condition",
                     condition_id,
                     f"Condition updated: {display_name}",
-                    {
-                        "name": display_name,
-                        "evaluation_state": evaluation_state,
-                    },
+                    {"name": display_name, "evaluation_state": evaluation_state},
                 )
 
     def set_condition_value(self, condition_id: str, value: bool | None) -> None:
@@ -690,8 +645,7 @@ class Repository:
                     (value, condition_id),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The condition no longer exists.")
+                if not row: raise NotFoundError("The condition no longer exists.")
                 _insert_event(
                     cur,
                     "condition.value_changed",
@@ -707,8 +661,7 @@ class Repository:
             with conn.cursor() as cur:
                 cur.execute("SELECT display_name FROM public.conditions WHERE id = %s::uuid", (condition_id,))
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The condition no longer exists.")
+                if not row: raise NotFoundError("The condition no longer exists.")
                 name = row[0]
                 cur.execute("SELECT note_id FROM public.condition_notes WHERE condition_id = %s::uuid", (condition_id,))
                 note_ids = [str(item[0]) for item in cur.fetchall()]
@@ -729,8 +682,7 @@ class Repository:
     def add_precondition(
         self, target_kind: NodeKind, target_id: str, condition_id: str
     ) -> bool:
-        if target_kind is NodeKind.CONDITION:
-            raise ValidationError("Conditions cannot be dependency targets.")
+        if target_kind is NodeKind.CONDITION: raise ValidationError("Conditions cannot be dependency targets.")
         target_id = as_uuid(target_id, f"{target_kind.value} id")
         condition_id = as_uuid(condition_id, "condition id")
         table = (
@@ -956,8 +908,7 @@ class Repository:
         end_minute: int = 0,
     ) -> None:
         task_id = as_uuid(task_id, "task id")
-        if interval < 1:
-            raise ValidationError("Recurrence interval must be at least 1.")
+        if interval < 1: raise ValidationError("Recurrence interval must be at least 1.")
         if by_month_day is not None and (by_month_day == 0 or not -31 <= by_month_day <= 31):
             raise ValidationError("Month day must be between -31 and 31 and cannot be 0.")
         if occurrence_count is not None and occurrence_count < 1:
@@ -974,8 +925,7 @@ class Repository:
             with conn.cursor() as cur:
                 cur.execute("SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 cur.execute(
                     """
                     INSERT INTO public.task_recurrence_rules
@@ -1034,10 +984,8 @@ class Repository:
                     occ_end = occ.replace(hour=int(end_hour), minute=int(end_minute), second=0, microsecond=0)
                     if (int(end_hour), int(end_minute)) < (int(reset_hour), int(reset_minute)):
                         occ_end += timedelta(days=1)
-                    if occ_end < now:
-                        occ = next_occurrence(temp_rule, now)
-                else:
-                    occ = next_occurrence(temp_rule, now)
+                    if occ_end < now: occ = next_occurrence(temp_rule, now)
+                else: occ = next_occurrence(temp_rule, now)
 
                 if occ is not None:
                     win_start = occ
@@ -1047,16 +995,14 @@ class Repository:
                         second=0,
                         microsecond=0,
                     )
-                    if (int(end_hour), int(end_minute)) < (int(reset_hour), int(reset_minute)):
-                        win_end += timedelta(days=1)
+                    if (int(end_hour), int(end_minute)) < (int(reset_hour), int(reset_minute)): win_end += timedelta(days=1)
                     cur.execute(
                         "UPDATE public.tasks "
                         "SET is_recurring = true, scheduled_start = %s, scheduled_end = %s "
                         "WHERE id = %s::uuid",
                         (win_start, win_end, task_id),
                     )
-                else:
-                    cur.execute("UPDATE public.tasks SET is_recurring = true WHERE id = %s::uuid", (task_id,))
+                else: cur.execute("UPDATE public.tasks SET is_recurring = true WHERE id = %s::uuid", (task_id,))
                 _insert_event(
                     cur,
                     "task.recurrence_saved",
@@ -1077,8 +1023,7 @@ class Repository:
             with conn.cursor() as cur:
                 cur.execute("SELECT name FROM public.tasks WHERE id = %s::uuid", (task_id,))
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 cur.execute("DELETE FROM public.task_recurrence_rules WHERE task_id = %s::uuid", (task_id,))
                 cur.execute(
                     "UPDATE public.tasks "
@@ -1106,8 +1051,7 @@ class Repository:
                     (task_id,),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 cur.execute(
                     "DELETE FROM public.task_availability_windows WHERE task_id = %s::uuid",
                     (task_id,),
@@ -1208,8 +1152,7 @@ class Repository:
                     (task_id,),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise NotFoundError("The task no longer exists.")
+                if not row: raise NotFoundError("The task no longer exists.")
                 name, state, end_hour, end_minute = row[0], row[1], int(row[2]), int(row[3])
                 window_start = occurrence
                 window_end = occurrence.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
@@ -1226,8 +1169,7 @@ class Repository:
                     "WHERE id = %s::uuid",
                     (window_start, window_end, task_id),
                 )
-                if state not in ("completed", "blocked"):
-                    return False, "already active"
+                if state not in ("completed", "blocked"): return False, "already active"
                 cur.execute("SAVEPOINT recurrence_reset")
                 try:
                     cur.execute(
@@ -1298,8 +1240,7 @@ class Repository:
                         "ORDER BY created_at ASC, id ASC LIMIT 1) RETURNING id"
                     )
                     row = cur.fetchone()
-                    if not row:
-                        break
+                    if not row: break
                     dropped.append(str(row[0]))
                     count -= 1
                 cur.execute(
@@ -1319,11 +1260,8 @@ class Repository:
 
     def load_thread(self, thread_id: str) -> tuple[ChatThread, list[ChatMessage]]:
         thread_id = as_uuid(thread_id, "thread id")
-        row = self.db.fetch_one(
-            "SELECT * FROM public.assistant_threads WHERE id = %s::uuid", (thread_id,)
-        )
-        if not row:
-            raise NotFoundError("The conversation no longer exists.")
+        row = self.db.fetch_one("SELECT * FROM public.assistant_threads WHERE id = %s::uuid", (thread_id,))
+        if not row: raise NotFoundError("The conversation no longer exists.")
         messages = self.db.fetch_all(
             "SELECT * FROM public.assistant_messages WHERE thread_id = %s::uuid "
             "ORDER BY id ASC",
@@ -1356,8 +1294,7 @@ class Repository:
         metadata: dict[str, Any] | None = None,
     ) -> str:
         thread_id = as_uuid(thread_id, "thread id")
-        if role not in ("user", "assistant", "system"):
-            raise ValidationError("Invalid assistant message role.")
+        if role not in ("user", "assistant", "system"): raise ValidationError("Invalid assistant message role.")
         with self.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1394,8 +1331,7 @@ class Repository:
         with self.db.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM public.assistant_threads WHERE id = %s::uuid", (thread_id,))
-                if cur.rowcount == 0:
-                    raise NotFoundError("The conversation no longer exists.")
+                if cur.rowcount == 0: raise NotFoundError("The conversation no longer exists.")
                 _insert_event(cur, "assistant.thread_deleted", "assistant_thread", thread_id, "Assistant conversation deleted")
 
     def rename_thread(self, thread_id: str, title: str) -> None:
@@ -1404,8 +1340,7 @@ class Repository:
         if self.db.execute(
             "UPDATE public.assistant_threads SET title = %s WHERE id = %s::uuid",
             (title, thread_id),
-        ) == 0:
-            raise NotFoundError("The conversation no longer exists.")
+        ) == 0: raise NotFoundError("The conversation no longer exists.")
 
     # ---------------------------------------------------------- custom queries
     def list_custom_queries(self) -> list[CustomQuery]:
@@ -1427,8 +1362,7 @@ class Repository:
     def create_custom_query(self, label: str, prompt: str, *, favorite: bool = False) -> str:
         label = clean_name(label, label="Query label")[:80]
         prompt = (prompt or "").strip()
-        if not prompt:
-            raise ValidationError("The backend instruction payload cannot be empty.")
+        if not prompt: raise ValidationError("The backend instruction payload cannot be empty.")
         row = self.db.fetch_one("SELECT COALESCE(max(sort_index), -1) + 1 AS next FROM public.custom_queries")
         next_index = int(row["next"]) if row else 0
         result = self.db.fetch_one(
@@ -1450,8 +1384,7 @@ class Repository:
         query_id = as_uuid(query_id, "query id")
         label = clean_name(label, label="Query label")[:80]
         prompt = (prompt or "").strip()
-        if not prompt:
-            raise ValidationError("The backend instruction payload cannot be empty.")
+        if not prompt: raise ValidationError("The backend instruction payload cannot be empty.")
         if favorite is None:
             count = self.db.execute(
                 "UPDATE public.custom_queries SET label = %s, prompt = %s "
@@ -1464,23 +1397,20 @@ class Repository:
                 "WHERE id = %s::uuid",
                 (label, prompt, bool(favorite), query_id),
             )
-        if count == 0:
-            raise NotFoundError("The custom query no longer exists.")
+        if count == 0: raise NotFoundError("The custom query no longer exists.")
 
     def delete_custom_query(self, query_id: str) -> None:
         query_id = as_uuid(query_id, "query id")
         if self.db.execute(
             "DELETE FROM public.custom_queries WHERE id = %s::uuid", (query_id,)
-        ) == 0:
-            raise NotFoundError("The custom query no longer exists.")
+        ) == 0: raise NotFoundError("The custom query no longer exists.")
 
     def set_custom_query_favorite(self, query_id: str, favorite: bool) -> None:
         query_id = as_uuid(query_id, "query id")
         if self.db.execute(
             "UPDATE public.custom_queries SET favorite = %s WHERE id = %s::uuid",
             (bool(favorite), query_id),
-        ) == 0:
-            raise NotFoundError("The custom query no longer exists.")
+        ) == 0: raise NotFoundError("The custom query no longer exists.")
 
     def reorder_custom_queries(self, ordered_ids: list[str]) -> None:
         with self.db.connection() as conn:
@@ -1525,8 +1455,7 @@ class Repository:
 
     def calendar_sync_state(self) -> SyncState:
         row = self.calendar_account()
-        if not row:
-            return SyncState(status="never", connected=False)
+        if not row: return SyncState(status="never", connected=False)
         status = row["sync_status"] or "never"
         return SyncState(
             status=status,
@@ -1596,8 +1525,7 @@ class Repository:
                 )
                 for event in events:
                     event_id = str(event["id"])
-                    if event.get("status") == "cancelled":
-                        continue
+                    if event.get("status") == "cancelled": continue
                     cur.execute(
                         """
                         INSERT INTO public.calendar_events
@@ -1733,8 +1661,7 @@ class Repository:
             default = f" DEFAULT {row['column_default']}" if row["column_default"] else ""
             lines.append(f"  {row['column_name']} {type_name} {null_text}{default}")
         lines.append("\nENUMS")
-        for row in enum_rows:
-            lines.append(f"  {row['typname']} = {list(row['labels'])}")
+        for row in enum_rows: lines.append(f"  {row['typname']} = {list(row['labels'])}")
         lines.append("\nFOREIGN KEYS")
         for row in fks:
             lines.append(
@@ -1758,18 +1685,13 @@ class Repository:
     def live_state_summary(self, snapshot: WorkspaceSnapshot) -> str:
         task_states = {state.value: 0 for state in TaskState}
         project_states = {state.value: 0 for state in ProjectState}
-        for task in snapshot.tasks.values():
-            task_states[task.current_state.value] += 1
-        for project in snapshot.projects.values():
-            project_states[project.current_state.value] += 1
+        for task in snapshot.tasks.values(): task_states[task.current_state.value] += 1
+        for project in snapshot.projects.values(): project_states[project.current_state.value] += 1
         values = {"true": 0, "false": 0, "unknown": 0}
         for condition in snapshot.conditions.values():
-            if condition.evaluation_state is True:
-                values["true"] += 1
-            elif condition.evaluation_state is False:
-                values["false"] += 1
-            else:
-                values["unknown"] += 1
+            if condition.evaluation_state is True: values["true"] += 1
+            elif condition.evaluation_state is False: values["false"] += 1
+            else: values["unknown"] += 1
         return (
             f"LIVE DATABASE STATE @ {datetime.now().isoformat(timespec='seconds')}\n"
             f"tasks by state: {task_states}\n"
@@ -1822,14 +1744,10 @@ class Repository:
                 lines.append(f"  task_prerequisites: task={task_id} source={source.key}")
         for project_id, condition_ids in list(snapshot.project_preconditions.items())[:limit]:
             for condition_id in condition_ids:
-                lines.append(
-                    f"  project_preconditions: project={project_id} condition={condition_id}"
-                )
+                lines.append(f"  project_preconditions: project={project_id} condition={condition_id}")
         for project_id, sources in list(snapshot.project_prerequisites.items())[:limit]:
             for source in sources:
-                lines.append(
-                    f"  project_prerequisites: project={project_id} source={source.key}"
-                )
+                lines.append(f"  project_prerequisites: project={project_id} source={source.key}")
         return "\n".join(lines)
 
     # ----------------------------------------------------------------- counts
@@ -1873,10 +1791,8 @@ class Repository:
         return counts
 
 def _truth(value: bool | None) -> str:
-    if value is True:
-        return "TRUE"
-    if value is False:
-        return "FALSE"
+    if value is True: return "TRUE"
+    if value is False: return "FALSE"
     return "UNKNOWN"
 
 def _public_tables() -> tuple[str, ...]:

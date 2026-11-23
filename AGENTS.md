@@ -8,7 +8,8 @@
 - **Database Schema:** Frozen unless explicitly requested. Do not alter tables, columns, or migrations when building UI features.
 - **UI & Styling (`efos_app/ui/`):**
   - Always use valid palette keys from `theme.py` via `c(...)` (e.g., `surface`, `input`, `border`, `accent`, `text`).
-  - Theme system uses a 6-stop (`0`–`5`) dark-to-slate spectrum (Deep Dark at `0` through Neutral Slate at `5`); do not reintroduce light themes above `5`.
+  - Theme system uses 3 dark-to-slate presets (`Dark`, `Graphite`, and `Slate`, mapped internally to stops `0`, `2`, and `4`); do not reintroduce light themes.
+  - Scale typography via `fs(px)` from `theme.py` (`Default` / `Large` / `Extra Large` presets) so small UI text remains readable without clipping.
   - Do not use `rgba('token_name', alpha)` inside `setStyleSheet` strings unless verified supported by `theme.py`.
   - Always use `GreenCheckBox` from `widgets.py` (crisp green-outlined checkmark) for checkboxes rather than solid-fill `QCheckBox` indicators.
   - When styling custom `QPushButton` subclasses directly via `self.setStyleSheet(...)`, target the subclass name (e.g., `HelpButton { ... }`) rather than `QPushButton`.
@@ -18,6 +19,6 @@
 
 ## Workflow & Verification Rules
 1. **Plan First for Multi-File Features:** Before editing multiple files, outline affected modules and shared state changes.
-2. **Test Locally:** Verify changes using `.venv\Scripts\python.exe main.py` (or `.venv\Scripts\python.exe -m pytest tests -q`) rather than `uv run` (which fails under sandbox cache locks), confirming clean startup with zero Qt stylesheet or console warnings.
+2. **Test Locally:** Verify changes using `.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider` and a brief GUI smoke check (`main.py`) rather than `uv run` (which fails under sandbox cache locks), confirming clean startup with zero Qt stylesheet or console warnings.
 3. **Packaging:** Do NOT run `build.ps1` automatically after minor edits; only run it when explicitly asked to build `release/EFOS.exe`.
 4. **Git Hygiene:** Keep commits focused and verify `git status` shows no stray temporary or staged build artifacts.

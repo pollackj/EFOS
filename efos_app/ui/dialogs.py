@@ -30,7 +30,7 @@ from ..errors import EFOSError
 from ..formatting import fmt_datetime
 from ..logic import availability_summary, normalize_availability_windows
 from ..models import (AvailabilityWindow, CalendarItem, NodeKind, RecurrenceFrequency, RecurrenceRule)
-from .theme import c, enable_native_title_bar, rgba
+from .theme import c, enable_native_title_bar, fs, rgba
 from .widgets import Badge, Card, Divider, GreenCheckBox, IconButton
 
 class BaseDialog(QDialog):
@@ -216,7 +216,7 @@ class RecurrenceDialog(BaseDialog):
         repeat_row = QHBoxLayout()
         repeat_row.setSpacing(8)
         every = QLabel("Every")
-        every.setStyleSheet(f"color: {c('muted')}; font-size: 12px;")
+        every.setStyleSheet(f"color: {c('muted')}; font-size: {fs(12)}px;")
         repeat_row.addWidget(every)
         self.interval = QSpinBox()
         self.interval.setRange(1, 99)
@@ -224,7 +224,7 @@ class RecurrenceDialog(BaseDialog):
         self.interval.setFixedWidth(66)
         repeat_row.addWidget(self.interval)
         self.unit_label = QLabel("week(s)")
-        self.unit_label.setStyleSheet(f"color: {c('muted')}; font-size: 12px;")
+        self.unit_label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(12)}px;")
         repeat_row.addWidget(self.unit_label)
         repeat_row.addStretch(1)
         self.root.addLayout(repeat_row)
@@ -446,11 +446,7 @@ class AvailabilityDialog(BaseDialog):
     recurrence. It defaults to 24/7 and never changes dependency evaluation.
     """
 
-    def __init__(
-        self,
-        windows: list[AvailabilityWindow] | None = None,
-        parent: QWidget | None = None,
-    ):
+    def __init__(self, windows: list[AvailabilityWindow] | None = None, parent: QWidget | None = None):
         super().__init__(
             parent,
             "Availability",
@@ -521,10 +517,8 @@ class AvailabilityDialog(BaseDialog):
 
         if initial:
             grouped: dict[tuple[int, int], set[int]] = {}
-            for window in initial:
-                grouped.setdefault((window.start_minute, window.end_minute), set()).add(window.weekday)
-            for (start, end), days in sorted(grouped.items()):
-                self._add_row(days=days, start=start, end=end)
+            for window in initial: grouped.setdefault((window.start_minute, window.end_minute), set()).add(window.weekday)
+            for (start, end), days in sorted(grouped.items()): self._add_row(days=days, start=start, end=end)
         if not self._rows: self._add_row(days=set(range(7)))
         self._sync_visibility()
         self._update_summary()
@@ -585,8 +579,7 @@ class AvailabilityDialog(BaseDialog):
         windows: list[AvailabilityWindow] = []
         for entry in self._rows:
             days = [day for day, check in entry["checks"].items() if check.isChecked()]
-            if not days:
-                raise ValueError("Select at least one weekday for each availability window.")
+            if not days: raise ValueError("Select at least one weekday for each availability window.")
             start = entry["start"].time()
             end = entry["end"].time()
             start_minute = start.hour() * 60 + start.minute()
@@ -648,8 +641,7 @@ class ScheduleConflictDialog(BaseDialog):
             empty = QLabel("No collision details were returned.")
             empty.setProperty("role", "muted")
             layout.addWidget(empty)
-        for conflict in conflicts:
-            layout.addWidget(_conflict_row(conflict))
+        for conflict in conflicts: layout.addWidget(_conflict_row(conflict))
         layout.addStretch(1)
         scroll.setWidget(content)
         self.root.addWidget(scroll)
@@ -657,8 +649,9 @@ class ScheduleConflictDialog(BaseDialog):
         warning.setStyleSheet(
             f"color: {c('amber')}; background: {rgba('amber', 0.07)}; "
             f"border: 1px solid {rgba('amber', 0.22)}; border-radius: 8px; "
-            "padding: 8px 10px; font-size: 11px;"
+            f"padding: 8px 10px; font-size: {fs(11)}px;"
         )
+
         warning.setWordWrap(True)
         self.root.addWidget(warning)
         self.root.addWidget(Divider())
@@ -689,15 +682,15 @@ def _conflict_row(conflict: CalendarItem) -> QFrame:
     text = QVBoxLayout()
     text.setSpacing(2)
     title = QLabel(conflict.title)
-    title.setStyleSheet(f"color: {c('text')}; font-size: 12px; font-weight: 600;")
+    title.setStyleSheet(f"color: {c('text')}; font-size: {fs(12)}px; font-weight: 600;")
     title.setWordWrap(True)
     text.addWidget(title)
     span = QLabel(f"{fmt_datetime(conflict.start)} → {fmt_datetime(conflict.end)}")
-    span.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+    span.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
     text.addWidget(span)
     if conflict.detail:
         detail = QLabel(conflict.detail)
-        detail.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
+        detail.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px;")
         detail.setWordWrap(True)
         text.addWidget(detail)
     layout.addLayout(text, 1)
@@ -770,7 +763,7 @@ class SchemaMismatchDialog(BaseDialog):
         )
         body = QLabel(message)
         body.setWordWrap(True)
-        body.setStyleSheet(f"color: {c('text_soft')}; font-size: 12px;")
+        body.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(12)}px;")
         self.root.addWidget(body)
         report = QPlainTextEdit()
         report.setReadOnly(True)
@@ -855,7 +848,7 @@ class DatabaseSetupDialog(BaseDialog):
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet(f"color: {c('muted')}; font-size: 11px;")
+        self.status.setStyleSheet(f"color: {c('muted')}; font-size: {fs(11)}px;")
         self.root.addWidget(self.status)
         self.root.addWidget(Divider())
         buttons = QHBoxLayout()
@@ -890,7 +883,7 @@ class DatabaseSetupDialog(BaseDialog):
 
     def _show_status(self, ok: bool, message: str) -> None:
         color = c("green") if ok else c("red")
-        self.status.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self.status.setStyleSheet(f"color: {color}; font-size: {fs(11)}px;")
         self.status.setText(("Connected. " if ok else "Failed. ") + message)
 
     def _initialize(self) -> None:
@@ -902,7 +895,7 @@ class DatabaseSetupDialog(BaseDialog):
             self._show_status(False, "PostgreSQL administrator password is required.")
             return
         self.init_button.setEnabled(False)
-        self.status.setStyleSheet(f"color: {c('muted')}; font-size: 11px;")
+        self.status.setStyleSheet(f"color: {c('muted')}; font-size: {fs(11)}px;")
         self.status.setText("Creating database, executing the canonical schema, verifying…")
         try:
             provision_database(admin, target)
@@ -925,12 +918,10 @@ class DatabaseSetupDialog(BaseDialog):
                 "admin_user": admin.user,
             }
             self.accept()
-        except EFOSError as exc:
-            self._show_status(False, str(exc))
+        except EFOSError as exc: self._show_status(False, str(exc))
         except Exception as exc:  # pragma: no cover - defensive
             self._show_status(False, f"{type(exc).__name__}: {exc}")
-        finally:
-            self.init_button.setEnabled(True)
+        finally: self.init_button.setEnabled(True)
 
 def confirm_dialog(
     parent: QWidget | None,

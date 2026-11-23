@@ -1,6 +1,5 @@
 """Typed domain records for the EFOS explicit dependency model."""
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -18,16 +17,10 @@ class TaskState(StrEnum):
 
     @property
     def label(self) -> str:
-        return {
-            "ready": "Ready",
-            "blocked": "Blocked",
-            "completed": "Completed",
-            "deferred": "Deferred",
-        }[self.value]
+        return {"ready": "Ready", "blocked": "Blocked", "completed": "Completed", "deferred": "Deferred"}[self.value]
 
     @property
-    def is_active(self) -> bool:
-        return self in (TaskState.READY, TaskState.BLOCKED)
+    def is_active(self) -> bool: return self in (TaskState.READY, TaskState.BLOCKED)
 
     @property
     def is_terminal(self) -> bool:
@@ -42,20 +35,13 @@ class ProjectState(StrEnum):
 
     @property
     def label(self) -> str:
-        return {
-            "active": "Active",
-            "stalled": "Stalled",
-            "shelved": "Shelved",
-            "resolved": "Resolved",
-        }[self.value]
+        return {"active": "Active", "stalled": "Stalled", "shelved": "Shelved", "resolved": "Resolved"}[self.value]
 
     @property
-    def is_open(self) -> bool:
-        return self in (ProjectState.ACTIVE, ProjectState.STALLED, ProjectState.SHELVED)
+    def is_open(self) -> bool: return self in (ProjectState.ACTIVE, ProjectState.STALLED, ProjectState.SHELVED)
 
     @property
-    def is_resolved(self) -> bool:
-        return self is ProjectState.RESOLVED
+    def is_resolved(self) -> bool: return self is ProjectState.RESOLVED
 
 class NodeKind(StrEnum):
     TASK = "task"
@@ -63,16 +49,14 @@ class NodeKind(StrEnum):
     CONDITION = "condition"
 
     @property
-    def label(self) -> str:
-        return self.value.title()
+    def label(self) -> str: return self.value.title()
 
 class EdgeKind(StrEnum):
     PRECONDITION = "precondition"
     PREREQUISITE = "prerequisite"
 
     @property
-    def label(self) -> str:
-        return "Precondition" if self is EdgeKind.PRECONDITION else "Prerequisite"
+    def label(self) -> str: return "Precondition" if self is EdgeKind.PRECONDITION else "Prerequisite"
 
 class RecurrenceFrequency(StrEnum):
     DAILY = "daily"
@@ -81,8 +65,7 @@ class RecurrenceFrequency(StrEnum):
     YEARLY = "yearly"
 
     @property
-    def label(self) -> str:
-        return self.value.title()
+    def label(self) -> str: return self.value.title()
 
 @dataclass(frozen=True, slots=True)
 class NodeRef:
@@ -90,8 +73,7 @@ class NodeRef:
     id: str
 
     @property
-    def key(self) -> str:
-        return f"{self.kind.value}:{self.id}"
+    def key(self) -> str: return f"{self.kind.value}:{self.id}"
 
     @classmethod
     def parse(cls, key: str) -> "NodeRef":
@@ -112,8 +94,7 @@ class AvailabilityWindow:
     end_minute: int
 
     @property
-    def key(self) -> tuple[int, int, int]:
-        return (self.weekday, self.start_minute, self.end_minute)
+    def key(self) -> tuple[int, int, int]: return (self.weekday, self.start_minute, self.end_minute)
 
 @dataclass(frozen=True, slots=True)
 class Edge:
@@ -122,12 +103,10 @@ class Edge:
     kind: EdgeKind
 
     @property
-    def key(self) -> str:
-        return f"{self.kind.value}:{self.source.key}->{self.target.key}"
+    def key(self) -> str: return f"{self.kind.value}:{self.source.key}->{self.target.key}"
 
     @property
-    def label(self) -> str:
-        return self.kind.label
+    def label(self) -> str: return self.kind.label
 
 @dataclass(slots=True)
 class RecurrenceRule:
@@ -146,24 +125,13 @@ class RecurrenceRule:
     created_at: datetime | None = None
 
     @property
-    def by_day_list(self) -> list[str]:
-        return [value for value in (self.by_day or "").split(",") if value]
+    def by_day_list(self) -> list[str]: return [value for value in (self.by_day or "").split(",") if value]
 
     def summary(self) -> str:
-        days = {
-            "MO": "Mon",
-            "TU": "Tue",
-            "WE": "Wed",
-            "TH": "Thu",
-            "FR": "Fri",
-            "SA": "Sat",
-            "SU": "Sun",
-        }
+        days = {"MO": "Mon", "TU": "Tue", "WE": "Wed", "TH": "Thu", "FR": "Fri", "SA": "Sat", "SU": "Sun"}
         interval = ""
-        if self.interval > 1:
-            interval = f"Every {self.interval} "
-        if self.frequency is RecurrenceFrequency.DAILY:
-            text = f"{interval or 'Every '}day"
+        if self.interval > 1: interval = f"Every {self.interval} "
+        if self.frequency is RecurrenceFrequency.DAILY: text = f"{interval or 'Every '}day"
         elif self.frequency is RecurrenceFrequency.WEEKLY:
             names = ", ".join(days.get(day, day) for day in self.by_day_list)
             text = f"{interval or 'Every '}week" + (f" on {names}" if names else "")
@@ -171,15 +139,11 @@ class RecurrenceRule:
             if self.by_month_day:
                 day = self.by_month_day
                 text = f"{interval or 'Every '}month on day {day}"
-            else:
-                text = f"{interval or 'Every '}month"
-        else:
-            text = f"{interval or 'Every '}year"
+            else: text = f"{interval or 'Every '}month"
+        else: text = f"{interval or 'Every '}year"
         end = ""
-        if self.occurrence_count:
-            end = f", {self.occurrence_count} occurrences"
-        elif self.until_date:
-            end = f", until {self.until_date:%b %d, %Y}"
+        if self.occurrence_count: end = f", {self.occurrence_count} occurrences"
+        elif self.until_date: end = f", until {self.until_date:%b %d, %Y}"
         return f"{text}{end}"
 
 @dataclass(slots=True)
@@ -205,8 +169,7 @@ class Task:
         return bool(self.availability)
 
     @property
-    def operational(self) -> bool:
-        return self.current_state.is_active
+    def operational(self) -> bool: return self.current_state.is_active
 
 @dataclass(slots=True)
 class Project:
@@ -254,19 +217,14 @@ class WorkspaceSnapshot:
             item = self.projects.get(ref.id)
             return item.current_state.value if item else "missing"
         item = self.conditions.get(ref.id)
-        if not item:
-            return "missing"
-        if item.evaluation_state is True:
-            return "true"
-        if item.evaluation_state is False:
-            return "false"
+        if not item: return "missing"
+        if item.evaluation_state is True: return "true"
+        if item.evaluation_state is False: return "false"
         return "unknown"
 
     def exists(self, ref: NodeRef) -> bool:
-        if ref.kind is NodeKind.TASK:
-            return ref.id in self.tasks
-        if ref.kind is NodeKind.PROJECT:
-            return ref.id in self.projects
+        if ref.kind is NodeKind.TASK: return ref.id in self.tasks
+        if ref.kind is NodeKind.PROJECT: return ref.id in self.projects
         return ref.id in self.conditions
 
     def task_condition_ids(self, task_id: str) -> set[str]:
@@ -276,27 +234,21 @@ class WorkspaceSnapshot:
         return set(self.project_preconditions.get(project_id, set()))
 
     def preconditions_for(self, ref: NodeRef) -> set[str]:
-        if ref.kind is NodeKind.TASK:
-            return self.task_condition_ids(ref.id)
-        if ref.kind is NodeKind.PROJECT:
-            return self.project_condition_ids(ref.id)
+        if ref.kind is NodeKind.TASK: return self.task_condition_ids(ref.id)
+        if ref.kind is NodeKind.PROJECT: return self.project_condition_ids(ref.id)
         return set()
 
     def prerequisites_for(self, ref: NodeRef) -> set[NodeRef]:
-        if ref.kind is NodeKind.TASK:
-            return set(self.task_prerequisites.get(ref.id, set()))
-        if ref.kind is NodeKind.PROJECT:
-            return set(self.project_prerequisites.get(ref.id, set()))
+        if ref.kind is NodeKind.TASK: return set(self.task_prerequisites.get(ref.id, set()))
+        if ref.kind is NodeKind.PROJECT: return set(self.project_prerequisites.get(ref.id, set()))
         return set()
 
     def attached_preconditions(self, condition_id: str) -> list[NodeRef]:
         result: list[NodeRef] = []
         for task_id, condition_ids in self.task_preconditions.items():
-            if condition_id in condition_ids:
-                result.append(NodeRef(NodeKind.TASK, task_id))
+            if condition_id in condition_ids: result.append(NodeRef(NodeKind.TASK, task_id))
         for project_id, condition_ids in self.project_preconditions.items():
-            if condition_id in condition_ids:
-                result.append(NodeRef(NodeKind.PROJECT, project_id))
+            if condition_id in condition_ids: result.append(NodeRef(NodeKind.PROJECT, project_id))
         return result
 
     def dependency_count(self, ref: NodeRef) -> int:
@@ -322,15 +274,13 @@ class WorkspaceSnapshot:
                         frontier.append(target)
         return seen
 
-    def downstream_count(self, ref: NodeRef) -> int:
-        return len(self.downstream_targets(ref))
+    def downstream_count(self, ref: NodeRef) -> int: return len(self.downstream_targets(ref))
 
     # --------------------------------------------------------------- edges
     def edges(self) -> list[Edge]:
         result: list[Edge] = []
         for task_id, condition_ids in self.task_preconditions.items():
-            if task_id not in self.tasks:
-                continue
+            if task_id not in self.tasks: continue
             for condition_id in condition_ids:
                 if condition_id in self.conditions:
                     result.append(
@@ -341,8 +291,7 @@ class WorkspaceSnapshot:
                         )
                     )
         for project_id, condition_ids in self.project_preconditions.items():
-            if project_id not in self.projects:
-                continue
+            if project_id not in self.projects: continue
             for condition_id in condition_ids:
                 if condition_id in self.conditions:
                     result.append(
@@ -353,40 +302,26 @@ class WorkspaceSnapshot:
                         )
                     )
         for task_id, sources in self.task_prerequisites.items():
-            if task_id not in self.tasks:
-                continue
+            if task_id not in self.tasks: continue
             for source in sources:
                 if self.exists(source):
-                    result.append(
-                        Edge(source, NodeRef(NodeKind.TASK, task_id), EdgeKind.PREREQUISITE)
-                    )
+                    result.append(Edge(source, NodeRef(NodeKind.TASK, task_id), EdgeKind.PREREQUISITE))
         for project_id, sources in self.project_prerequisites.items():
-            if project_id not in self.projects:
-                continue
+            if project_id not in self.projects: continue
             for source in sources:
                 if self.exists(source):
-                    result.append(
-                        Edge(
-                            source,
-                            NodeRef(NodeKind.PROJECT, project_id),
-                            EdgeKind.PREREQUISITE,
-                        )
-                    )
+                    result.append(Edge(source, NodeRef(NodeKind.PROJECT, project_id), EdgeKind.PREREQUISITE))
         return result
 
-    def count_edges(self) -> int:
-        return len(self.edges())
+    def count_edges(self) -> int: return len(self.edges())
 
     def operational_refs(self) -> list[NodeRef]:
         refs: list[NodeRef] = []
         for task in self.tasks.values():
-            if task.current_state.is_active:
-                refs.append(NodeRef(NodeKind.TASK, task.id))
+            if task.current_state.is_active: refs.append(NodeRef(NodeKind.TASK, task.id))
         for project in self.projects.values():
-            if project.current_state.is_open:
-                refs.append(NodeRef(NodeKind.PROJECT, project.id))
-        for condition in self.conditions.values():
-            refs.append(NodeRef(NodeKind.CONDITION, condition.id))
+            if project.current_state.is_open: refs.append(NodeRef(NodeKind.PROJECT, project.id))
+        for condition in self.conditions.values(): refs.append(NodeRef(NodeKind.CONDITION, condition.id))
         return refs
 
     def all_refs(self) -> list[NodeRef]:
@@ -397,10 +332,7 @@ class WorkspaceSnapshot:
 
     # ---------------------------------------------------------- dataclasses
     def downstream_labels(self, ref: NodeRef) -> list[str]:
-        return sorted(
-            (self.get_name(target) for target in self.downstream_targets(ref)),
-            key=str.casefold,
-        )
+        return sorted((self.get_name(target) for target in self.downstream_targets(ref)), key=str.casefold)
 
 @dataclass(slots=True)
 class EntityStatus:
@@ -410,8 +342,7 @@ class EntityStatus:
     blockers: list[str] = field(default_factory=list)
 
     @property
-    def total(self) -> int:
-        return len(self.precondition_values) + len(self.prerequisite_values)
+    def total(self) -> int: return len(self.precondition_values) + len(self.prerequisite_values)
 
     @property
     def satisfied(self) -> int:
@@ -420,8 +351,7 @@ class EntityStatus:
         )
 
     @property
-    def ratio(self) -> float:
-        return self.satisfied / self.total if self.total else 0.0
+    def ratio(self) -> float: return self.satisfied / self.total if self.total else 0.0
 
     def unresolved_preconditions(self) -> list[str]:
         return [key for key, value in self.precondition_values.items() if value is not True]
@@ -434,20 +364,15 @@ class Evaluation:
     errors: dict[str, str] = field(default_factory=dict)
 
     def for_ref(self, ref: NodeRef) -> EntityStatus | None:
-        if ref.kind is NodeKind.TASK:
-            return self.tasks.get(ref.id)
-        if ref.kind is NodeKind.PROJECT:
-            return self.projects.get(ref.id)
+        if ref.kind is NodeKind.TASK: return self.tasks.get(ref.id)
+        if ref.kind is NodeKind.PROJECT: return self.projects.get(ref.id)
         return None
 
-    def task_status(self, task_id: str) -> EntityStatus:
-        return self.tasks.get(task_id, EntityStatus())
+    def task_status(self, task_id: str) -> EntityStatus: return self.tasks.get(task_id, EntityStatus())
 
-    def project_status(self, project_id: str) -> EntityStatus:
-        return self.projects.get(project_id, EntityStatus())
+    def project_status(self, project_id: str) -> EntityStatus: return self.projects.get(project_id, EntityStatus())
 
-    def condition_value(self, condition_id: str) -> bool | None:
-        return self.condition_values.get(condition_id)
+    def condition_value(self, condition_id: str) -> bool | None: return self.condition_values.get(condition_id)
 
 @dataclass(slots=True)
 class Recommendation:
@@ -473,12 +398,10 @@ class ConnectionStatus:
     message: str = ""
 
     @property
-    def endpoint(self) -> str:
-        return f"{self.host}:{self.port}/{self.database}"
+    def endpoint(self) -> str: return f"{self.host}:{self.port}/{self.database}"
 
     @property
-    def metadata(self) -> str:
-        return self.endpoint if self.connected else "not connected"
+    def metadata(self) -> str: return self.endpoint if self.connected else "not connected"
 
 @dataclass(slots=True)
 class ChatThread:
@@ -527,13 +450,11 @@ class SyncState:
 
     @property
     def warning(self) -> str:
-        if self.status == "ok":
-            return ""
+        if self.status == "ok": return ""
         if self.last_sync_at:
             stamp = self.last_sync_at.strftime("%b %d, %Y %H:%M")
             return f"Sync Unavailable — Data Stale as of {stamp}"
-        if self.connected:
-            return "Sync Unavailable — no local snapshot yet"
+        if self.connected: return "Sync Unavailable — no local snapshot yet"
         return "Google Calendar is not connected"
 
 # Tables that the read-only RAG assistant may see.

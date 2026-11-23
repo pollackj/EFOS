@@ -1,8 +1,6 @@
 """Main window shell, navigation, Suggested Focus, status, and coordination."""
 from __future__ import annotations
-
 from datetime import datetime
-
 from PyQt6.QtCore import QByteArray, QEvent, QTimer, Qt
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
@@ -20,13 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..config import (
-    APP_DISPLAY_NAME,
-    APP_VERSION,
-    AppConfig,
-    load_ui_state,
-    save_ui_state,
-)
+from ..config import (APP_DISPLAY_NAME, APP_VERSION, AppConfig, load_ui_state, save_ui_state)
 from ..errors import EFOSError
 from ..models import ConnectionStatus, NodeKind, NodeRef, PriorityItem
 from ..scheduler import BackgroundScheduler
@@ -46,27 +38,20 @@ from .theme import (
     current_theme,
     current_theme_value,
     enable_native_title_bar,
+    fs,
     migrate_persisted_appearance,
+    set_font_scale,
     set_theme_value as apply_theme_value,
 )
-from .widgets import (
-    Badge,
-    BrandHeader,
-    NavButton,
-    StatusDot,
-    SuggestedFocusCard,
-    Toast,
-)
-
+from .widgets import (Badge, BrandHeader, NavButton, StatusDot, SuggestedFocusCard, Toast)
 
 PAGE_META = [
     ("OVERVIEW", "Workspace snapshot", "Your current endeavors at a glance"),
-    ("WORKSPACE", "Dashboard", "Manage metadata and map flat dependency chains."),
+    ("WORKSPACE", "Dashboard", "Manage active items and map dependency chains."),
     ("REGISTRY", "Canonical record", "Every task, project, and condition in one sortable grid."),
     ("REASONING", "AI assistant", "Grounded two-pass routing over the live workspace."),
     ("SCHEDULE", "Calendar", "Local tasks and synchronized Google Calendar events."),
 ]
-
 
 class TitleBar(QFrame):
     """Frameless title bar with native move and resize support."""
@@ -85,9 +70,7 @@ class TitleBar(QFrame):
         mark.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(mark)
         name = QLabel("EFOS")
-        name.setStyleSheet(
-            f"color: {c('text')}; font-size: 11px; font-weight: 700; letter-spacing: 1px;"
-        )
+        name.setStyleSheet(f"color: {c('text')}; font-size: {fs(11)}px; font-weight: 700; letter-spacing: 1px;")
         name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(name)
         separator = QFrame()
@@ -96,7 +79,7 @@ class TitleBar(QFrame):
         separator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(separator)
         product = QLabel(APP_DISPLAY_NAME)
-        product.setStyleSheet(f"color: {c('muted')}; font-size: 9px;")
+        product.setStyleSheet(f"color: {c('muted')}; font-size: {fs(9)}px;")
         product.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(product)
         layout.addStretch(1)
@@ -113,18 +96,15 @@ class TitleBar(QFrame):
     def _control(self, text: str, tooltip: str, *, close: bool = False) -> QPushButton:
         button = QPushButton(text)
         button.setProperty("windowControl", True)
-        if close:
-            button.setProperty("closeButton", True)
+        if close: button.setProperty("closeButton", True)
         button.setFixedSize(42 if close else 34, 27)
         button.setToolTip(tooltip)
         button.setCursor(Qt.CursorShape.ArrowCursor)
         return button
 
     def toggle_maximize(self) -> None:
-        if self.owner.isMaximized():
-            self.owner.showNormal()
-        else:
-            self.owner.showMaximized()
+        if self.owner.isMaximized(): self.owner.showNormal()
+        else: self.owner.showMaximized()
         self.sync_state()
 
     def sync_state(self) -> None:
@@ -181,19 +161,18 @@ class MainWindow(QMainWindow):
         self.ui_state = load_ui_state()
         # Legacy theme values migrate onto Dark / Graphite / Slate here too, so
         # a window constructed without main.py still lands on a curated stop.
-        self._theme_value = apply_theme_value(
-            migrate_persisted_appearance(self.ui_state)
-        )
+        self._theme_value = apply_theme_value(migrate_persisted_appearance(self.ui_state))
         self._landing_view = str(self.ui_state.get("landing_view", "Dashboard"))
         self._flow_auto_layout = bool(self.ui_state.get("flow_auto_layout", True))
-        self._inspector_width = self._clamp_inspector_width(
-            self.ui_state.get("inspector_width", 360)
-        )
+        raw_layout_mode = str(self.ui_state.get("flow_layout_mode", "source")).lower()
+        self._flow_layout_mode = "sink" if raw_layout_mode == "sink" else "source"
+        self._inspector_width = self._clamp_inspector_width(self.ui_state.get("inspector_width", 360))
+        self._font_scale = str(self.ui_state.get("font_scale", "standard"))
+        set_font_scale(self._font_scale)
         self._settings_dialog = None
         self._applying_width = False
         app = QApplication.instance()
-        if app is not None:
-            apply_theme(app, value=self._theme_value)
+        if app is not None: apply_theme(app, value=self._theme_value, font_scale=self._font_scale)
         self._build_window()
         self._build_shortcuts()
         self._restore_window_state()
@@ -202,9 +181,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_landing_view)
         self.scheduler = BackgroundScheduler(service, parent=self)
         self.scheduler.pulse_completed.connect(self._pulse_completed)
-        self.scheduler.pulse_failed.connect(
-            lambda message: self.show_toast(f"Recurrence pulse failed: {message}", "error")
-        )
+        self.scheduler.pulse_failed.connect(lambda message: self.show_toast(f"Recurrence pulse failed: {message}", "error"))
         self.scheduler.start()
         self._probe_timer = QTimer(self)
         self._probe_timer.timeout.connect(self._probe_connection)
@@ -225,16 +202,12 @@ class MainWindow(QMainWindow):
     def _restore_window_state(self) -> None:
         geometry = self.ui_state.get("geometry")
         if geometry:
-            try:
-                self.restoreGeometry(QByteArray.fromBase64(str(geometry).encode()))
-            except (ValueError, TypeError):
-                pass
+            try: self.restoreGeometry(QByteArray.fromBase64(str(geometry).encode()))
+            except (ValueError, TypeError): pass
         state = self.ui_state.get("window_state")
         if state:
-            try:
-                self.restoreState(QByteArray.fromBase64(str(state).encode()))
-            except (ValueError, TypeError):
-                pass
+            try: self.restoreState(QByteArray.fromBase64(str(state).encode()))
+            except (ValueError, TypeError): pass
 
     def _build_window(self) -> None:
         self.setWindowTitle(f"EFOS · {APP_DISPLAY_NAME}")
@@ -251,9 +224,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("Root")
         central.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        central.setStyleSheet(
-            f"QWidget#Root {{ background: {c('bg')}; }}"
-        )
+        central.setStyleSheet(f"QWidget#Root {{ background: {c('bg')}; }}")
         
         # 2. Build the top-level outer border frame layer
         border_frame = QFrame()
@@ -265,9 +236,7 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 background-color: {c('bg')};
             }}
-            QWidget#Root {{
-                border-radius: 3px;
-            }}
+            QWidget#Root {{border-radius: 3px;}}
             """
         )
         
@@ -280,7 +249,6 @@ class MainWindow(QMainWindow):
 
         # 4. Make the border frame container the absolute face of the application window
         self.setCentralWidget(border_frame)
-        
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -312,26 +280,10 @@ class MainWindow(QMainWindow):
             ResizeHandle(self, Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
             ResizeHandle(self, Qt.Edge.TopEdge, Qt.CursorShape.SizeVerCursor),
             ResizeHandle(self, Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
-            ResizeHandle(
-                self,
-                Qt.Edge.LeftEdge | Qt.Edge.TopEdge,
-                Qt.CursorShape.SizeFDiagCursor,
-            ),
-            ResizeHandle(
-                self,
-                Qt.Edge.RightEdge | Qt.Edge.BottomEdge,
-                Qt.CursorShape.SizeFDiagCursor,
-            ),
-            ResizeHandle(
-                self,
-                Qt.Edge.RightEdge | Qt.Edge.TopEdge,
-                Qt.CursorShape.SizeBDiagCursor,
-            ),
-            ResizeHandle(
-                self,
-                Qt.Edge.LeftEdge | Qt.Edge.BottomEdge,
-                Qt.CursorShape.SizeBDiagCursor,
-            ),
+            ResizeHandle(self, Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.CursorShape.SizeFDiagCursor),
+            ResizeHandle(self, Qt.Edge.RightEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeFDiagCursor),
+            ResizeHandle(self, Qt.Edge.RightEdge | Qt.Edge.TopEdge, Qt.CursorShape.SizeBDiagCursor),
+            ResizeHandle(self, Qt.Edge.LeftEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeBDiagCursor),
         ]
 
     def _build_pages(self) -> None:
@@ -344,15 +296,8 @@ class MainWindow(QMainWindow):
         self.registry = RegistryPage(self.service)
         self.chat = ChatPage(self.service)
         self.calendar = CalendarPage(self.service)
-        self.pages = [
-            self.overview,
-            self.dashboard,
-            self.registry,
-            self.chat,
-            self.calendar,
-        ]
-        for page in self.pages:
-            self.stack.addWidget(page)
+        self.pages = [self.overview, self.dashboard, self.registry, self.chat, self.calendar]
+        for page in self.pages: self.stack.addWidget(page)
         self.overview.create_requested.connect(self.create_entity)
         self.overview.open_node.connect(self.open_node)
         self.overview.open_dashboard.connect(lambda: self.set_page(1))
@@ -369,10 +314,11 @@ class MainWindow(QMainWindow):
         self.calendar.toast_requested.connect(self.show_toast)
         self.chat.toast_requested.connect(self.show_toast)
         self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
+        self.dashboard.set_layout_mode(self._flow_layout_mode, relayout=False)
+        self.dashboard.layout_mode_changed.connect(self._dashboard_layout_mode_changed)
         self._restore_inspector_widths()
         self._wire_inspector_splitters()
-        if self.stack.currentIndex() < 0 or self.stack.currentIndex() >= len(self.pages):
-            self.set_page(0)
+        if self.stack.currentIndex() < 0 or self.stack.currentIndex() >= len(self.pages): self.set_page(0)
 
     def _sidebar(self) -> QWidget:
         sidebar = QFrame()
@@ -424,9 +370,11 @@ class MainWindow(QMainWindow):
     def _header(self) -> QWidget:
         header = QFrame()
         header.setObjectName("Header")
-        header.setFixedHeight(80)
+        # The eyebrow, 24 px page title, and subtitle stack must fit without
+        # clipping at every text-size preset, so the bar grows with fs().
+        header.setFixedHeight(max(84, fs(84)))
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(26, 12, 22, 12)
+        layout.setContentsMargins(26, 8, 22, 8)
         layout.setSpacing(12)
         titles = QVBoxLayout()
         titles.setSpacing(1)
@@ -436,20 +384,18 @@ class MainWindow(QMainWindow):
         self.page_title = QLabel("Workspace snapshot")
         self.page_title.setStyleSheet(
             f"color: {c('text')}; font-family: 'Segoe UI Variable Display'; "
-            "font-size: 22px; font-weight: 650;"
+            f"font-size: {fs(24)}px; font-weight: 650;"
         )
         titles.addWidget(self.page_title)
         self.page_subtitle = QLabel("Your current endeavors at a glance")
-        self.page_subtitle.setStyleSheet(f"color: {c('muted')}; font-size: 11px;")
+        self.page_subtitle.setStyleSheet(f"color: {c('muted')}; font-size: {fs(11)}px;")
         titles.addWidget(self.page_subtitle)
         layout.addLayout(titles, 1)
         self.header_links = Badge("0 LINKS", "accent")
         layout.addWidget(self.header_links)
         self.clock = QLabel()
-        self.clock.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.clock.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+        self.clock.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.clock.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px;")
         layout.addWidget(self.clock)
         recompute = QPushButton("Recompute")
         recompute.setIcon(icon("refresh", c("muted"), 15))
@@ -471,40 +417,32 @@ class MainWindow(QMainWindow):
     def _status_bar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("StatusBar")
-        bar.setFixedHeight(30)
+        bar.setFixedHeight(max(30, fs(30)))
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(18, 0, 18, 0)
         layout.setSpacing(8)
         self.db_dot = StatusDot(c("green"), 8)
         layout.addWidget(self.db_dot)
         self.db_label = QLabel("Postgres")
-        self.db_label.setStyleSheet(
-            f"color: {c('text_soft')}; font-size: 10px; font-weight: 600;"
-        )
+        self.db_label.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(10)}px; font-weight: 600;")
         layout.addWidget(self.db_label)
         self.db_meta = QLabel(self.config.db_display)
-        self.db_meta.setStyleSheet(f"color: {c('muted')}; font-size: 9px;")
+        self.db_meta.setStyleSheet(f"color: {c('muted')}; font-size: {fs(9)}px;")
         layout.addWidget(self.db_meta)
         separator = QFrame()
         separator.setFixedSize(1, 12)
         separator.setStyleSheet(f"background: {c('border')};")
         layout.addWidget(separator)
         self.footer_counts = QLabel("0 tasks · 0 projects · 0 conditions")
-        self.footer_counts.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+        self.footer_counts.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
         layout.addWidget(self.footer_counts)
         layout.addStretch(1)
-        self.footer_version = QLabel(
-            f"EFOS {APP_VERSION} · explicit dependency model"
-        )
-        self.footer_version.setStyleSheet(
-            f"color: {c('faint')}; font-size: 9px; letter-spacing: 0.3px;"
-        )
-        self.footer_version.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self.footer_version = QLabel(f"EFOS {APP_VERSION} · explicit dependency model")
+        self.footer_version.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px; letter-spacing: 0.3px;")
+        self.footer_version.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         guard = QLabel("READ-ONLY SQL GUARD")
         guard.setStyleSheet(
-            f"color: {c('accent')}; font-size: 8px; font-weight: 700; "
+            f"color: {c('accent')}; font-size: {fs(8)}px; font-weight: 700; "
             "letter-spacing: 0.8px;"
         )
         # The two right-hand labels live in their own row with explicit
@@ -524,9 +462,7 @@ class MainWindow(QMainWindow):
         for index in range(5):
             shortcut = QShortcut(QKeySequence(f"Ctrl+{index + 1}"), self)
             shortcut.activated.connect(lambda i=index: self.set_page(i))
-        QShortcut(QKeySequence("Ctrl+N"), self).activated.connect(
-            lambda: self.create_entity(NodeKind.TASK)
-        )
+        QShortcut(QKeySequence("Ctrl+N"), self).activated.connect(lambda: self.create_entity(NodeKind.TASK))
         QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self.recompute)
         QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(
             lambda: (self.set_page(3), self.chat.composer.setFocus())
@@ -539,24 +475,16 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- updating
     def refresh_all(self, *, initial: bool = False, message: str | None = None) -> None:
-        try:
-            view = self.service.load_view()
+        try: view = self.service.load_view()
         except EFOSError as exc:
             self._apply_connection(
-                ConnectionStatus(
-                    False,
-                    self.config.db_host,
-                    self.config.db_port,
-                    self.config.db_name,
-                    str(exc),
-                )
+                ConnectionStatus(False, self.config.db_host, self.config.db_port, self.config.db_name, str(exc))
             )
             self.show_toast(str(exc), "error")
             return
         self.view = view
         for page in self.pages:
-            try:
-                page.refresh(view)
+            try: page.refresh(view)
             except Exception as exc:  # pragma: no cover - defensive
                 self.show_toast(f"{type(exc).__name__}: {exc}", "error")
         snapshot = view.snapshot
@@ -566,16 +494,8 @@ class MainWindow(QMainWindow):
             f"{len(snapshot.conditions)} conditions"
         )
         self.focus_card.set_recommendation(view.recommendation)
-        self._apply_connection(
-            ConnectionStatus(
-                True,
-                self.config.db_host,
-                self.config.db_port,
-                self.config.db_name,
-            )
-        )
-        if message:
-            self.show_toast(message, "success")
+        self._apply_connection(ConnectionStatus(True, self.config.db_host, self.config.db_port, self.config.db_name))
+        if message: self.show_toast(message, "success")
         elif view.changes and not initial:
             labels = ", ".join(change.name for change in view.changes[:2])
             suffix = "…" if len(view.changes) > 2 else ""
@@ -584,32 +504,25 @@ class MainWindow(QMainWindow):
     def _apply_connection(self, status: ConnectionStatus) -> None:
         self.db_dot.set_color(c("green") if status.connected else c("red"))
         self.db_meta.setText(status.endpoint if status.connected else "not connected")
-        self.db_meta.setStyleSheet(
-            f"color: {c('muted') if status.connected else c('red')}; font-size: 9px;"
-        )
+        self.db_meta.setStyleSheet(f"color: {c('muted') if status.connected else c('red')}; font-size: {fs(9)}px;")
         if self._db_connected is True and not status.connected:
             self.show_toast("PostgreSQL disconnected. Showing the last cached view.", "error")
         self._db_connected = status.connected
 
-    def on_mutated(self, message: str) -> None:
-        self.refresh_all(message=message)
+    def on_mutated(self, message: str) -> None: self.refresh_all(message=message)
 
     def recompute(self) -> None:
-        try:
-            view = self.service.refresh()
+        try: view = self.service.refresh()
         except EFOSError as exc:
             self.show_toast(str(exc), "error")
             return
         self.refresh_all()
-        if view.changes:
-            self.show_toast(f"{len(view.changes)} derived transitions applied", "success")
-        else:
-            self.show_toast("All dependency barriers are stable", "info")
+        if view.changes: self.show_toast(f"{len(view.changes)} derived transitions applied", "success")
+        else: self.show_toast("All dependency barriers are stable", "info")
 
     # ------------------------------------------------------------ connection
     def _probe_connection(self) -> None:
-        if self._probe_worker is not None and self._probe_worker.isRunning():
-            return
+        if self._probe_worker is not None and self._probe_worker.isRunning(): return
         self._probe_worker = ConnectionProbeWorker(self.service, self)
         self._probe_worker.result_ready.connect(self._apply_connection)
         self._probe_worker.finished.connect(self._probe_finished)
@@ -624,67 +537,48 @@ class MainWindow(QMainWindow):
     def _pulse_completed(self, results, timestamp, changes) -> None:
         fired = [item for item in results if item[2] == "reset"]
         blocked = [item for item in results if item[2] == "blocked by dependencies"]
-        if not results and not changes:
-            return
-        if fired:
-            self.refresh_all(
-                message=f"Recurrence reset · {', '.join(item[1] for item in fired)}"
-            )
+        if not results and not changes: return
+        if fired: self.refresh_all(message=f"Recurrence reset · {', '.join(item[1] for item in fired)}")
         elif changes:
             names = ", ".join(change.name for change in changes[:2])
             suffix = "…" if len(changes) > 2 else ""
             self.refresh_all(message=f"Derived transition · {names}{suffix}")
-        elif blocked:
-            self.show_toast(
-                "Recurring reset blocked by unresolved dependencies (logged).", "info"
-            )
+        elif blocked: self.show_toast("Recurring reset blocked by unresolved dependencies (logged).", "info")
 
     # ---------------------------------------------------------------- calendar
     def _periodic_sync(self) -> None:
-        try:
-            state = self.service.calendar_sync_state()
-        except Exception:
-            return
-        if state.connected:
-            self.calendar.sync_now()
+        try: state = self.service.calendar_sync_state()
+        except Exception: return
+        if state.connected: self.calendar.sync_now()
 
     # ------------------------------------------------------------ navigation
     def flush_notes(self) -> bool:
         for page in (self.dashboard, self.registry):
             try:
-                if not page.flush_notes():
-                    return False
-            except Exception:
-                return False
+                if not page.flush_notes(): return False
+            except Exception: return False
         return True
 
     def set_page(self, index: int) -> None:
-        if not 0 <= index < len(self.pages):
-            return
-        if index != self.stack.currentIndex() and not self.flush_notes():
-            return
+        if not 0 <= index < len(self.pages): return
+        if index != self.stack.currentIndex() and not self.flush_notes(): return
         self.stack.setCurrentIndex(index)
         self._last_page = index
-        for position, button in enumerate(self.nav_buttons):
-            button.setChecked(position == index)
+        for position, button in enumerate(self.nav_buttons): button.setChecked(position == index)
         eyebrow, title, subtitle = PAGE_META[index]
         self.eyebrow.setText(eyebrow)
         self.page_title.setText(title)
         self.page_subtitle.setText(subtitle)
-        if index == 4 and self.view:
-            self.calendar.refresh(self.view)
-        if index == 3 and self.view:
-            self.chat.refresh(self.view)
+        if index == 4 and self.view: self.calendar.refresh(self.view)
+        if index == 3 and self.view: self.chat.refresh(self.view)
 
     def open_node(self, ref: NodeRef) -> None:
-        if not self.flush_notes():
-            return
+        if not self.flush_notes(): return
         self.set_page(1)
         self.dashboard.select_manage(ref)
 
     def open_in_flow(self, ref: NodeRef) -> None:
-        if not self.flush_notes():
-            return
+        if not self.flush_notes(): return
         self.set_page(1)
         visible = self.dashboard.select_flow(ref)
         if not visible:
@@ -696,8 +590,7 @@ class MainWindow(QMainWindow):
 
     def open_recommendation(self) -> None:
         recommendation = self.view.recommendation if self.view else None
-        if recommendation is None:
-            return
+        if recommendation is None: return
         self.open_node(recommendation.ref)
 
     # -------------------------------------------------------------- actions
@@ -705,25 +598,16 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         action_task = menu.addAction(icon("task", c("accent"), 15), "New task")
         action_project = menu.addAction(icon("project", c("accent"), 15), "New project")
-        action_condition = menu.addAction(
-            icon("condition", c("accent"), 15), "New condition"
-        )
-        chosen = menu.exec(
-            self.new_button.mapToGlobal(self.new_button.rect().bottomLeft())
-        )
-        if chosen is action_task:
-            self.create_entity(NodeKind.TASK)
-        elif chosen is action_project:
-            self.create_entity(NodeKind.PROJECT)
-        elif chosen is action_condition:
-            self.create_entity(NodeKind.CONDITION)
+        action_condition = menu.addAction(icon("condition", c("accent"), 15), "New condition")
+        chosen = menu.exec(self.new_button.mapToGlobal(self.new_button.rect().bottomLeft()))
+        if chosen is action_task: self.create_entity(NodeKind.TASK)
+        elif chosen is action_project: self.create_entity(NodeKind.PROJECT)
+        elif chosen is action_condition: self.create_entity(NodeKind.CONDITION)
 
     def create_entity(self, kind: NodeKind) -> None:
-        if not self.flush_notes():
-            return
+        if not self.flush_notes(): return
         dialog = CreateEntityDialog(kind, self)
-        if not dialog.exec():
-            return
+        if not dialog.exec(): return
         values = dialog.values()
         try:
             if kind is NodeKind.TASK:
@@ -743,8 +627,7 @@ class MainWindow(QMainWindow):
                             reset_hour=rule["reset_hour"],
                             reset_minute=rule["reset_minute"],
                         )
-            elif kind is NodeKind.PROJECT:
-                new_id = self.service.create_project(values["name"])
+            elif kind is NodeKind.PROJECT: new_id = self.service.create_project(values["name"])
             else:
                 new_id = self.service.create_condition(
                     values["name"],
@@ -757,8 +640,7 @@ class MainWindow(QMainWindow):
         self.open_node(NodeRef(kind, new_id))
         self.show_toast(f"{kind.label} created", "success")
 
-    def show_toast(self, message: str, level: str = "success") -> None:
-        self.toast.notify(message, level)
+    def show_toast(self, message: str, level: str = "success") -> None: self.toast.notify(message, level)
 
     # ------------------------------------------------------------------ theme
     def _theme_change_blocked(self) -> bool:
@@ -783,10 +665,8 @@ class MainWindow(QMainWindow):
         Legacy 0–100 values and retired stop values are migrated by
         ``set_theme_value`` onto the nearest of stops 0, 2, and 4.
         """
-        if self._theme_change_blocked():
-            return False
-        if not self.flush_notes():
-            return False
+        if self._theme_change_blocked(): return False
+        if not self.flush_notes(): return False
         index = self.stack.currentIndex()
         selected = self.dashboard.selected_ref
         manage_tab = self.dashboard.stack.currentIndex()
@@ -794,6 +674,7 @@ class MainWindow(QMainWindow):
         calendar_mode = self.calendar.mode
         calendar_anchor = self.calendar.anchor
         flow_pending = self.dashboard.flow.startup_layout_pending
+        flow_state = self._capture_flow_state()
         self._remember_inspector_width()
         value = apply_theme_value(value)
         self._theme_value = value
@@ -801,8 +682,7 @@ class MainWindow(QMainWindow):
         save_ui_state({"theme": current_theme(), "theme_value": value})
         self.ui_state = load_ui_state()
         app = QApplication.instance()
-        if app is not None:
-            apply_theme(app, value=value)
+        if app is not None: apply_theme(app, value=value)
         if rebuild:
             self._rebuild_interface(
                 index=index,
@@ -812,8 +692,46 @@ class MainWindow(QMainWindow):
                 calendar_mode=calendar_mode,
                 calendar_anchor=calendar_anchor,
                 flow_pending=flow_pending,
+                flow_state=flow_state,
             )
         return True
+
+    def change_font_scale(self, preset: str) -> bool:
+        if self._theme_change_blocked(): return False
+        if not self.flush_notes(): return False
+        index = self.stack.currentIndex()
+        selected = self.dashboard.selected_ref
+        manage_tab = self.dashboard.stack.currentIndex()
+        thread = self.chat.thread_id
+        calendar_mode = self.calendar.mode
+        calendar_anchor = self.calendar.anchor
+        flow_pending = self.dashboard.flow.startup_layout_pending
+        flow_state = self._capture_flow_state()
+        self._remember_inspector_width()
+        self._font_scale = preset if preset in ("standard", "large", "xlarge") else "standard"
+        set_font_scale(self._font_scale)
+        save_ui_state({"font_scale": self._font_scale})
+        self.ui_state = load_ui_state()
+        app = QApplication.instance()
+        if app is not None: apply_theme(app, value=self._theme_value, font_scale=self._font_scale)
+        self._rebuild_interface(
+            index=index,
+            selected=selected,
+            manage_tab=manage_tab,
+            thread=thread,
+            calendar_mode=calendar_mode,
+            calendar_anchor=calendar_anchor,
+            flow_pending=flow_pending,
+            flow_state=flow_state,
+        )
+        return True
+
+    def _capture_flow_state(self) -> dict | None:
+        """Snapshot the Flow canvas zoom and centre before a rebuild discards it."""
+        dashboard = getattr(self, "dashboard", None)
+        if dashboard is None: return None
+        try: return dashboard.capture_flow_state()
+        except Exception: return None
 
     def _rebuild_interface(
         self,
@@ -825,48 +743,45 @@ class MainWindow(QMainWindow):
         calendar_mode: str,
         calendar_anchor: datetime,
         flow_pending: bool = True,
+        flow_state: dict | None = None,
     ) -> None:
+        if flow_state is None: flow_state = self._capture_flow_state()
         previous_size = self.size()
         old_central = self.takeCentralWidget()
         if hasattr(self, "_clock_timer") and self._clock_timer is not None:
             self._clock_timer.stop()
             self._clock_timer.deleteLater()
         for page in getattr(self, "pages", []):
-            try:
-                page.shutdown()
-            except Exception:
-                pass
-        if old_central is not None:
-            old_central.deleteLater()
+            try: page.shutdown()
+            except Exception: pass
+        if old_central is not None: old_central.deleteLater()
         self._build_window()
         self.resize(previous_size)
         self.title_bar.sync_state()
         self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
         self.dashboard.flow.set_startup_layout_pending(flow_pending)
         self._position_resize_handles()
-        if hasattr(self, "toast") and self.toast is not None:
-            self.toast.deleteLater()
+        if hasattr(self, "toast") and self.toast is not None: self.toast.deleteLater()
         self.toast = Toast(self)
         self.refresh_all()
-        if selected is not None and self.view is not None:
-            self.dashboard.select_manage(selected)
+        if selected is not None and self.view is not None: self.dashboard.select_manage(selected)
         self.dashboard.stack.setCurrentIndex(manage_tab)
         self.dashboard.tabs.select(manage_tab, emit=False)
         if thread and self.view is not None:
             self.chat.thread_id = thread
             self.chat.refresh(self.view)
-            try:
-                self.chat._load_thread(thread, render=True)
-            except EFOSError:
-                pass
-        mode_index = {"day": 0, "week": 1, "month": 2, "schedule": 3}.get(
-            calendar_mode, 1
-        )
+            try: self.chat._load_thread(thread, render=True)
+            except EFOSError: pass
+        mode_index = {"day": 0, "week": 1, "month": 2, "schedule": 3}.get(calendar_mode, 1)
         self.calendar.mode = calendar_mode
         self.calendar.anchor = calendar_anchor
         self.calendar.view_switch.select(mode_index, emit=False)
         self.set_page(min(index, len(self.pages) - 1))
         self.calendar.reload()
+        # The rebuilt Dashboard starts on Manage; re-apply the Flow zoom/centre
+        # snapshot and re-sync the shared toolbar with the restored tab.
+        self.dashboard.sync_toolbar()
+        if flow_state is not None: self.dashboard.restore_flow_state(flow_state)
         QTimer.singleShot(30, lambda: enable_native_title_bar(self))
 
     # --------------------------------------------------------------- settings
@@ -877,20 +792,20 @@ class MainWindow(QMainWindow):
         self._remember_inspector_width()
         dialog = SettingsDialog(
             theme_value=current_theme_value(),
+            font_scale=self._font_scale,
             landing_view=self._landing_view,
             flow_auto_layout=self._flow_auto_layout,
             inspector_width=self._inspector_width,
             parent=self,
         )
         dialog.theme_value_changed.connect(self._settings_theme_changed)
+        dialog.font_scale_changed.connect(self._settings_font_scale_changed)
         dialog.landing_view_changed.connect(self._settings_landing_changed)
         dialog.flow_auto_layout_changed.connect(self._settings_flow_changed)
         dialog.inspector_width_changed.connect(self._settings_width_changed)
         self._settings_dialog = dialog
-        try:
-            dialog.exec()
-        finally:
-            self._settings_dialog = None
+        try: dialog.exec()
+        finally: self._settings_dialog = None
 
     def _settings_theme_changed(self, value: int) -> None:
         if self.change_theme_value(value):
@@ -899,6 +814,13 @@ class MainWindow(QMainWindow):
                 dialog.raise_()
                 dialog.activateWindow()
 
+    def _settings_font_scale_changed(self, preset: str) -> None:
+        if self.change_font_scale(preset):
+            dialog = self._settings_dialog
+            if dialog is not None:
+                dialog.raise_()
+                dialog.activateWindow()
+    
     def _settings_landing_changed(self, value: str) -> None:
         self._landing_view = str(value)
         save_ui_state({"landing_view": self._landing_view})
@@ -908,8 +830,12 @@ class MainWindow(QMainWindow):
         self._flow_auto_layout = bool(enabled)
         save_ui_state({"flow_auto_layout": self._flow_auto_layout})
         self.ui_state = load_ui_state()
-        if hasattr(self, "dashboard"):
-            self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
+        if hasattr(self, "dashboard"): self.dashboard.flow.set_startup_auto_layout(self._flow_auto_layout)
+
+    def _dashboard_layout_mode_changed(self, mode: str) -> None:
+        self._flow_layout_mode = "sink" if mode == "sink" else "source"
+        save_ui_state({"flow_layout_mode": self._flow_layout_mode})
+        self.ui_state = load_ui_state()
 
     def _settings_width_changed(self, width: int) -> None:
         self._inspector_width = self._clamp_inspector_width(width)
@@ -921,21 +847,16 @@ class MainWindow(QMainWindow):
     def _apply_landing_view(self) -> None:
         """Route to the configured default landing view after startup refresh."""
         target = self._landing_view
-        if target == "Overview":
-            self.set_page(0)
+        if target == "Overview": self.set_page(0)
         elif target == "Flow":
             self.set_page(1)
             self.dashboard.show_flow()
-        elif target == "Calendar":
-            self.set_page(4)
-        elif target == "Assistant":
-            self.set_page(3)
+        elif target == "Calendar": self.set_page(4)
+        elif target == "Assistant": self.set_page(3)
         elif target in ("Projects", "Tasks"):
             self.set_page(1)
             self.dashboard.show_manage()
-            QTimer.singleShot(
-                0, lambda name=target: self.dashboard.focus_group(name)
-            )
+            QTimer.singleShot(0, lambda name=target: self.dashboard.focus_group(name))
         else:
             self.set_page(1)
             self.dashboard.show_manage()
@@ -943,10 +864,8 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------- inspector width
     @staticmethod
     def _clamp_inspector_width(value) -> int:  # type: ignore[no-untyped-def]
-        try:
-            width = int(value)
-        except (TypeError, ValueError):
-            width = 360
+        try: width = int(value)
+        except (TypeError, ValueError): width = 360
         return max(300, min(420, width))
 
     def _inspector_splitters(self) -> list:
@@ -964,8 +883,7 @@ class MainWindow(QMainWindow):
         return [splitter for splitter in splitters if splitter is not None]
 
     def _apply_inspector_width(self, width: int) -> None:
-        if self._applying_width:
-            return
+        if self._applying_width: return
         self._applying_width = True
         try:
             width = self._clamp_inspector_width(width)
@@ -979,19 +897,25 @@ class MainWindow(QMainWindow):
                 # ``sizes()`` already excludes the handle, so it is the pane
                 # space available for the requested width.
                 total = sum(splitter.sizes())
-                if total <= 0:
-                    total = max(1, splitter.width() - splitter.handleWidth())
+                if total <= 0: total = max(1, splitter.width() - splitter.handleWidth())
                 splitter.setSizes([max(1, total - width), width])
-        finally:
-            self._applying_width = False
+            # The Dashboard toolbar is pinned to the left workspace column, so
+            # it must follow every Inspector-width change (drag or preset).
+            self._sync_dashboard_toolbar()
+        finally: self._applying_width = False
 
-    def _restore_inspector_widths(self) -> None:
-        self._apply_inspector_width(self._inspector_width)
+    def _sync_dashboard_toolbar(self) -> None:
+        """Re-align the Dashboard toolbar after the Inspector pane moves."""
+        dashboard = getattr(self, "dashboard", None)
+        if dashboard is None: return
+        try: dashboard.sync_toolbar()
+        except Exception: pass
+
+    def _restore_inspector_widths(self) -> None: self._apply_inspector_width(self._inspector_width)
 
     def _remember_inspector_width(self) -> None:
         splitters = self._inspector_splitters()
-        if not splitters:
-            return
+        if not splitters: return
         visible = [splitter for splitter in splitters if splitter.isVisible()]
         if not visible:
             # No workspace pane is on screen (for example the Overview page).
@@ -1007,58 +931,38 @@ class MainWindow(QMainWindow):
 
     def _wire_inspector_splitters(self) -> None:
         for splitter in self._inspector_splitters():
-            try:
-                splitter.splitterMoved.disconnect()
-            except TypeError:
-                pass
-            splitter.splitterMoved.connect(
-                lambda *_args: self._remember_inspector_width()
-            )
+            try: splitter.splitterMoved.disconnect()
+            except TypeError: pass
+            splitter.splitterMoved.connect(lambda *_args: self._remember_inspector_width())
 
     # ----------------------------------------------------------------- events
     def _position_resize_handles(self) -> None:
-        if not hasattr(self, "resize_handles") or not hasattr(self, "central_widget"):
-            return
+        if not hasattr(self, "resize_handles") or not hasattr(self, "central_widget"): return
         visible = not self.isMaximized()
         rect = self.central_widget.rect()
         thickness = 6
         corner = 11
         left, right, top, bottom = self.resize_handles[:4]
         left.setGeometry(0, corner, thickness, max(0, rect.height() - corner * 2))
-        right.setGeometry(
-            rect.width() - thickness,
-            corner,
-            thickness,
-            max(0, rect.height() - corner * 2),
-        )
+        right.setGeometry(rect.width() - thickness, corner, thickness, max(0, rect.height() - corner * 2))
         top.setGeometry(corner, 0, max(0, rect.width() - corner * 2), thickness)
-        bottom.setGeometry(
-            corner,
-            rect.height() - thickness,
-            max(0, rect.width() - corner * 2),
-            thickness,
-        )
+        bottom.setGeometry(corner, rect.height() - thickness, max(0, rect.width() - corner * 2), thickness)
         self.resize_handles[4].setGeometry(0, 0, corner, corner)
-        self.resize_handles[5].setGeometry(
-            rect.width() - corner, rect.height() - corner, corner, corner
-        )
+        self.resize_handles[5].setGeometry(rect.width() - corner, rect.height() - corner, corner, corner)
         self.resize_handles[6].setGeometry(rect.width() - corner, 0, corner, corner)
         self.resize_handles[7].setGeometry(0, rect.height() - corner, corner, corner)
         for handle in self.resize_handles:
             handle.setVisible(visible)
-            if visible:
-                handle.raise_()
+            if visible: handle.raise_()
 
     def resizeEvent(self, event):  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
-        if hasattr(self, "toast"):
-            self.toast.reposition()
+        if hasattr(self, "toast"): self.toast.reposition()
         self._position_resize_handles()
 
     def showEvent(self, event):  # type: ignore[no-untyped-def]
         super().showEvent(event)
-        if hasattr(self, "title_bar"):
-            self.title_bar.sync_state()
+        if hasattr(self, "title_bar"): self.title_bar.sync_state()
         self._position_resize_handles()
         QTimer.singleShot(30, lambda: enable_native_title_bar(self))
 
@@ -1069,44 +973,32 @@ class MainWindow(QMainWindow):
             self._position_resize_handles()
 
     def closeEvent(self, event):  # type: ignore[no-untyped-def]
-        try:
-            self.flush_notes()
-        except Exception:
-            pass
+        try: self.flush_notes()
+        except Exception: pass
         self.layout_store.save()
         for page in getattr(self, "pages", []):
-            try:
-                page.shutdown()
-            except Exception:
-                pass
-        for timer_name in (
-            "_initial_probe_timer",
-            "_initial_sync_timer",
-            "_probe_timer",
-            "_sync_timer",
-        ):
+            try: page.shutdown()
+            except Exception: pass
+        for timer_name in ("_initial_probe_timer", "_initial_sync_timer", "_probe_timer", "_sync_timer"):
             timer = getattr(self, timer_name, None)
-            if timer is not None:
-                timer.stop()
+            if timer is not None: timer.stop()
         probe = getattr(self, "_probe_worker", None)
-        if probe is not None and probe.isRunning():
-            probe.wait(1500)
-        if hasattr(self, "scheduler"):
-            self.scheduler.stop()
+        if probe is not None and probe.isRunning(): probe.wait(1500)
+        if hasattr(self, "scheduler"): self.scheduler.stop()
         self._remember_inspector_width()
         save_ui_state(
             {
+                "font_scale": self._font_scale,
                 "theme": current_theme(),
                 "theme_value": current_theme_value(),
                 "landing_view": self._landing_view,
                 "flow_auto_layout": self._flow_auto_layout,
+                "flow_layout_mode": self._flow_layout_mode,
                 "inspector_width": self._inspector_width,
                 "geometry": bytes(self.saveGeometry().toBase64()).decode(),
                 "window_state": bytes(self.saveState().toBase64()).decode(),
             }
         )
-        try:
-            self.service.close()
-        except Exception:
-            pass
+        try: self.service.close()
+        except Exception: pass
         super().closeEvent(event)

@@ -1,8 +1,6 @@
 """Reusable UI primitives with live dark/light palette support."""
 from __future__ import annotations
-
 from datetime import datetime
-
 from PyQt6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
@@ -27,7 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .icons import brand_pixmap, dotted_line_pixmap, icon
-from .theme import c, display_font, rgba, ui_font
+from .theme import c, display_font, fs, rgba, ui_font
 
 # ---------------------------------------------------------------------------
 # Unified two-pane page shell geometry
@@ -38,29 +36,25 @@ from .theme import c, display_font, rgba, ui_font
 # pane. Keeping the numbers here makes the four surfaces provably identical.
 PAGE_MARGIN = 24
 PANE_GUTTER = 20
-TOOLBAR_HEIGHT = 40
-
+TOOLBAR_HEIGHT = max(40, fs(40))
 
 def page_margins(layout) -> None:  # type: ignore[no-untyped-def]
     """Apply the shared 24 px page padding to an outer page layout."""
     layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
 
-
 def toolbar_row() -> tuple[QWidget, QHBoxLayout]:
     """Create the shared compact toolbar row that precedes every pane splitter."""
     holder = QWidget()
-    holder.setFixedHeight(TOOLBAR_HEIGHT)
+    holder.setFixedHeight(max(TOOLBAR_HEIGHT, fs(TOOLBAR_HEIGHT)))
     layout = QHBoxLayout(holder)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(8)
     return holder, layout
 
-
 def configure_pane_splitter(splitter) -> None:  # type: ignore[no-untyped-def]
     """Apply the shared 20 px gutter and non-collapsible panes."""
     splitter.setChildrenCollapsible(False)
     splitter.setHandleWidth(PANE_GUTTER)
-
 
 class InspectorSplitter(QSplitter):
     """Two-pane splitter that keeps the Inspector/Query pane at a fixed width.
@@ -85,13 +79,11 @@ class InspectorSplitter(QSplitter):
         return self._pane_width
 
     def _apply_pane_width(self) -> None:
-        if self._pane_width is None:
-            return
+        if self._pane_width is None: return
         # QSplitter sizes exclude the handle, so subtract the 20 px gutter to
         # land the Inspector/Query pane on the exact requested pixel width.
         available = self.width() - self.handleWidth()
-        if available <= self._pane_width + 1:
-            return
+        if available <= self._pane_width + 1: return
         self.setSizes([max(1, available - self._pane_width), self._pane_width])
 
     def resizeEvent(self, event):  # type: ignore[no-untyped-def]
@@ -111,10 +103,7 @@ class Card(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
-            event.position().toPoint()
-        ):
-            self.clicked.emit()
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()): self.clicked.emit()
         super().mouseReleaseEvent(event)
 
 class ClickableRow(QFrame):
@@ -131,10 +120,7 @@ class ClickableRow(QFrame):
         )
 
     def mouseReleaseEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
-            event.position().toPoint()
-        ):
-            self.clicked.emit()
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()): self.clicked.emit()
         super().mouseReleaseEvent(event)
 
 class Badge(QLabel):
@@ -146,8 +132,7 @@ class Badge(QLabel):
         self.set_tone(tone)
 
     def set_tone(self, tone: str, text: str | None = None) -> None:
-        if text is not None:
-            self.setText(text)
+        if text is not None: self.setText(text)
         self.setProperty("tone", tone)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -173,8 +158,7 @@ class IconButton(QPushButton):
         self.setIcon(icon(icon_name, color or c("muted"), size))
         self.setIconSize(QSize(size, size))
         self.setFixedSize(32, 32)
-        if tooltip:
-            self.setToolTip(tooltip)
+        if tooltip: self.setToolTip(tooltip)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
 class NavButton(QPushButton):
@@ -194,14 +178,12 @@ class NavButton(QPushButton):
         self.setIconSize(QSize(18, 18))
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setMinimumHeight(39)
-        if checkable:
-            self.toggled.connect(self._sync_icon)
+        if checkable: self.toggled.connect(self._sync_icon)
 
     def _sync_icon(self, checked: bool) -> None:
         self.setIcon(icon(self._icon_name, c("accent") if checked else c("muted"), 18))
 
-    def sync_theme(self) -> None:
-        self._sync_icon(self.isChecked())
+    def sync_theme(self) -> None: self._sync_icon(self.isChecked())
 
 class SegmentedControl(QWidget):
     changed = pyqtSignal(int)
@@ -224,19 +206,15 @@ class SegmentedControl(QWidget):
             button.clicked.connect(lambda _=False, i=index: self.select(i))
             layout.addWidget(button)
             self.buttons.append(button)
-        if self.buttons:
-            self.buttons[0].setChecked(True)
+        if self.buttons: self.buttons[0].setChecked(True)
 
     def select(self, index: int, *, emit: bool = True) -> None:
-        for position, button in enumerate(self.buttons):
-            button.setChecked(position == index)
-        if emit:
-            self.changed.emit(index)
+        for position, button in enumerate(self.buttons): button.setChecked(position == index)
+        if emit: self.changed.emit(index)
 
     def current(self) -> int:
         for index, button in enumerate(self.buttons):
-            if button.isChecked():
-                return index
+            if button.isChecked(): return index
         return 0
 
 class SectionHeader(QWidget):
@@ -249,7 +227,7 @@ class SectionHeader(QWidget):
     ):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        self.setMaximumHeight(54 if subtitle else 30)
+        self.setMaximumHeight(fs(58) if subtitle else fs(34))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -266,8 +244,7 @@ class SectionHeader(QWidget):
             text_col.addWidget(subtitle_label)
         layout.addLayout(text_col)
         layout.addStretch(1)
-        if action is not None:
-            layout.addWidget(action)
+        if action is not None: layout.addWidget(action)
 
 class MetricCard(Card):
     def __init__(
@@ -311,8 +288,7 @@ class MetricCard(Card):
 
     def set_value(self, value: str, hint: str | None = None) -> None:
         self.value.setText(value)
-        if hint is not None:
-            self.hint.setText(hint)
+        if hint is not None: self.hint.setText(hint)
 
 class EmptyState(QWidget):
     def __init__(
@@ -332,9 +308,7 @@ class EmptyState(QWidget):
         mark.setPixmap(icon(icon_name, c("accent"), 30).pixmap(30, 30))
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setFixedSize(58, 58)
-        mark.setStyleSheet(
-            f"background: {c('surface')}; border: 1px solid {c('border')}; border-radius: 16px;"
-        )
+        mark.setStyleSheet(f"background: {c('surface')}; border: 1px solid {c('border')}; border-radius: 16px;")
         layout.addWidget(mark, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addSpacing(10)
         heading = QLabel(title)
@@ -365,7 +339,7 @@ class InlineBanner(QFrame):
         layout.addWidget(self.icon_label)
         self.message = QLabel("")
         self.message.setWordWrap(True)
-        self.message.setStyleSheet(f"color: {c('text')}; font-size: 12px;")
+        self.message.setStyleSheet(f"color: {c('text')}; font-size: {fs(12)}px;")
         layout.addWidget(self.message, 1)
         self.close_button = IconButton("close", "Dismiss", size=14)
         self.close_button.setFixedSize(24, 24)
@@ -376,12 +350,8 @@ class InlineBanner(QFrame):
         self._timer.timeout.connect(self.dismiss)
 
     def show_message(self, message: str, level: str = "error", timeout_ms: int = 6500) -> None:
-        tone_key = {"error": "red", "info": "accent", "success": "green", "warn": "amber"}.get(
-            level, "accent"
-        )
-        self.icon_label.setPixmap(
-            icon("alert" if level == "error" else "sensor", c(tone_key), 16).pixmap(16, 16)
-        )
+        tone_key = {"error": "red", "info": "accent", "success": "green", "warn": "amber"}.get(level, "accent")
+        self.icon_label.setPixmap(icon("alert" if level == "error" else "sensor", c(tone_key), 16).pixmap(16, 16))
         self.message.setText(message)
         self.setStyleSheet(
             f"InlineBanner {{ background: {rgba(tone_key, 0.07)}; "
@@ -389,8 +359,7 @@ class InlineBanner(QFrame):
         )
         self.show()
         self.raise_()
-        if timeout_ms > 0:
-            self._timer.start(timeout_ms)
+        if timeout_ms > 0: self._timer.start(timeout_ms)
 
     def dismiss(self) -> None:
         self._timer.stop()
@@ -412,7 +381,7 @@ class Toast(QFrame):
         self.icon_label = QLabel()
         layout.addWidget(self.icon_label)
         self.label = QLabel()
-        self.label.setStyleSheet(f"color: {c('text')}; font-size: 12px;")
+        self.label.setStyleSheet(f"color: {c('text')}; font-size: {fs(12)}px;")
         layout.addWidget(self.label)
         self.effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.effect)
@@ -425,12 +394,8 @@ class Toast(QFrame):
         self._timer.timeout.connect(self.hide_animated)
 
     def notify(self, message: str, level: str = "success") -> None:
-        tone_key = {"success": "green", "error": "red", "info": "accent", "warn": "amber"}.get(
-            level, "accent"
-        )
-        self.icon_label.setPixmap(
-            icon("check" if level == "success" else "alert", c(tone_key), 16).pixmap(16, 16)
-        )
+        tone_key = {"success": "green", "error": "red", "info": "accent", "warn": "amber"}.get(level, "accent")
+        self.icon_label.setPixmap(icon("check" if level == "success" else "alert", c(tone_key), 16).pixmap(16, 16))
         self.label.setText(message)
         self.adjustSize()
         self.reposition()
@@ -443,8 +408,7 @@ class Toast(QFrame):
         self._timer.start(3200)
 
     def reposition(self) -> None:
-        if self.parentWidget() is None:
-            return
+        if self.parentWidget() is None: return
         parent = self.parentWidget()
         self.move(parent.width() - self.width() - 26, parent.height() - self.height() - 54)
 
@@ -456,17 +420,32 @@ class Toast(QFrame):
         self.animation.start()
 
     def _hide_now(self) -> None:
-        try:
-            self.animation.finished.disconnect(self._hide_now)
-        except TypeError:
-            pass
+        try: self.animation.finished.disconnect(self._hide_now)
+        except TypeError: pass
         self.hide()
 
 class ElidedLabel(QLabel):
+    """Single-line label that elides its text instead of clipping or expanding.
+
+    ``minimumSizeHint`` reports a zero width so a surrounding layout may shrink
+    the label (and trigger the ellipsis) instead of overflowing its parent.
+    """
+
     def __init__(self, text: str = "", parent: QWidget | None = None):
         super().__init__(text, parent)
         self._full_text = text
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        # Always request the full text width, even while the painted text is
+        # elided; otherwise the elided hint would collapse the label further.
+        metrics = QFontMetrics(self.font())
+        height = super().sizeHint().height()
+        return QSize(metrics.horizontalAdvance(self._full_text) + 2, height)
 
     def setText(self, text: str) -> None:  # noqa: N802
         self._full_text = text
@@ -479,11 +458,15 @@ class ElidedLabel(QLabel):
         self._elide()
 
     def _elide(self) -> None:
+        available = self.width() - 1
+        # Before the first layout pass there is no width to measure against;
+        # keep the full text so labels are never blanked while hidden.
+        if available <= 0:
+            super().setText(self._full_text)
+            return
         metrics = QFontMetrics(self.font())
-        clipped = metrics.elidedText(
-            self._full_text, Qt.TextElideMode.ElideRight, max(0, self.width() - 2)
-        )
-        super().setText(clipped)
+        clipped = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, available)
+        if clipped != super().text(): super().setText(clipped)
 
 class BrandHeader(QWidget):
     def __init__(self, parent: QWidget | None = None):
@@ -499,15 +482,13 @@ class BrandHeader(QWidget):
         mark.setFixedSize(34, 34)
         top.addWidget(mark)
         word = QLabel("EFOS")
-        word.setFont(display_font(17, QFont.Weight.Bold))
+        word.setFont(display_font(16, QFont.Weight.Bold))
         word.setStyleSheet(f"color: {c('text')}; letter-spacing: 2px;")
         top.addWidget(word)
         top.addStretch(1)
         layout.addLayout(top)
         sub = QLabel("EXECUTIVE CONSOLE")
-        sub.setStyleSheet(
-            f"color: {c('faint')}; font-size: 8px; font-weight: 700; letter-spacing: 1.8px;"
-        )
+        sub.setStyleSheet(f"color: {c('faint')}; font-size: {fs(8)}px; font-weight: 700; letter-spacing: 1.8px;")
         layout.addWidget(sub)
         dotted = QLabel()
         dotted.setPixmap(dotted_line_pixmap(160, 10))
@@ -554,29 +535,26 @@ class TogglePill(QPushButton):
         self.setStyleSheet(
             f"QPushButton {{ color: {color}; background: {rgba(color, 0.07)}; "
             f"border: 1px solid {rgba(color, 0.22)}; "
-            "border-radius: 7px; padding: 2px 9px; font-size: 10px; font-weight: 700; "
+            f"border-radius: 7px; padding: 2px 9px; font-size: {fs(10)}px; font-weight: 700; "
             "letter-spacing: 0.5px; }"
             f"QPushButton:hover {{ background: {rgba(color, 0.13)}; }}"
         )
 
-    def value(self) -> bool | None:
-        return self._value
+    def value(self) -> bool | None: return self._value
 
 class KeyValueRow(QWidget):
-    def __init__(
-        self, key: str, value: str, parent: QWidget | None = None, *, mono: bool = False
-    ):
+    def __init__(self, key: str, value: str, parent: QWidget | None = None, *, mono: bool = False):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 2)
         layout.setSpacing(12)
         key_label = QLabel(key)
-        key_label.setStyleSheet(f"color: {c('muted')}; font-size: 11px;")
+        key_label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(11)}px;")
         key_label.setMinimumWidth(88)
         value_label = QLabel(value)
         value_label.setWordWrap(True)
         value_label.setStyleSheet(
-            f"color: {c('text')}; font-size: 11px; "
+            f"color: {c('text')}; font-size: {fs(11)}px; "
             f"font-family: {'Cascadia Mono, Consolas, monospace' if mono else 'Segoe UI'};"
         )
         value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -605,22 +583,20 @@ class SuggestedFocusCard(QFrame):
         self.eyebrow.setProperty("role", "eyebrow")
         self.layout_box.addWidget(self.eyebrow)
         self.title = QLabel("")
-        self.title.setStyleSheet(
-            f"color: {c('text')}; font-size: 12px; font-weight: 700;"
-        )
+        self.title.setStyleSheet(f"color: {c('text')}; font-size: {fs(12)}px; font-weight: 700;")
         self.title.setWordWrap(True)
         self.layout_box.addWidget(self.title)
         self.state_badge = Badge("", "unknown")
         self.layout_box.addWidget(self.state_badge, 0, Qt.AlignmentFlag.AlignLeft)
         self.rationale = QLabel("")
-        self.rationale.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+        self.rationale.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
         self.rationale.setWordWrap(True)
         self.layout_box.addWidget(self.rationale)
         self.layout_box.addStretch(1)
         self.empty = QLabel("No ready Tasks or active Projects to recommend")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty.setWordWrap(True)
-        self.empty.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+        self.empty.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
         self.layout_box.addWidget(self.empty)
         self.empty.hide()
         self.recommendation = None
@@ -672,7 +648,7 @@ class GreenCheckBox(QCheckBox):
         self._centered = bool(centered)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setStyleSheet(
-            f"QCheckBox {{ color: {c('text_soft')}; font-size: 11px; spacing: 8px; }}"
+            f"QCheckBox {{ color: {c('text_soft')}; font-size: {fs(11)}px; spacing: 8px; }}"
             "QCheckBox::indicator { width: 16px; height: 16px; background: transparent; border: none; }"
         )
 
@@ -696,12 +672,8 @@ class GreenCheckBox(QCheckBox):
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
-            painter.drawLine(
-                int(x + 3.5), int(y + 8), int(x + 6.5), int(y + 11)
-            )
-            painter.drawLine(
-                int(x + 6.5), int(y + 11), int(x + 11.5), int(y + 5)
-            )
+            painter.drawLine(int(x + 3.5), int(y + 8), int(x + 6.5), int(y + 11))
+            painter.drawLine(int(x + 6.5), int(y + 11), int(x + 11.5), int(y + 5))
         else:
             painter.setPen(QPen(QColor(c("border_hi")), 1.2))
             painter.setBrush(QColor(c("input")))

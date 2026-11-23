@@ -15,6 +15,9 @@ from efos_app.ui.dialogs import AvailabilityDialog
 from efos_app.ui.graph import LayoutStore
 from efos_app.ui.main_window import MainWindow
 from efos_app.ui.settings_dialog import (
+    CODE_TO_FONT_SCALE,
+    FONT_SIZE_OPTIONS,
+    FONT_SCALE_TO_CODE,
     INSPECTOR_WIDTH_PRESETS,
     LANDING_VIEWS,
     nearest_inspector_width,
@@ -24,7 +27,9 @@ from efos_app.ui.theme import (
     c as theme_color,
     current_theme,
     current_theme_value,
+    fs,
     preset_name,
+    set_font_scale,
 )
 from efos_app.ui.widgets import (
     PANE_GUTTER,
@@ -100,11 +105,8 @@ def test_window_navigation_sidebar_and_status(service, qapp):
         label.text() == "Dashboard" for label in dashboard.findChildren(QLabel)
     )
     assert dashboard.toolbar.height() == TOOLBAR_HEIGHT
-    assert dashboard.tabs.parentWidget() is dashboard.toolbar
-    assert all(
-        button.parentWidget() is dashboard.toolbar
-        for button in dashboard._create_buttons
-    )
+    assert dashboard.toolbar.isAncestorOf(dashboard.tabs)
+    assert all(dashboard.toolbar.isAncestorOf(button) for button in dashboard._create_buttons)
     assert [button.text() for button in dashboard._create_buttons] == [
         "New task",
         "New project",
@@ -112,7 +114,7 @@ def test_window_navigation_sidebar_and_status(service, qapp):
     ]
     for button in dashboard.tabs.buttons:
         assert button.parentWidget() is dashboard.tabs
-        assert button.parentWidget().parentWidget() is dashboard.toolbar
+        assert dashboard.toolbar.isAncestorOf(button)
     assert dashboard.tabs.current() == 0
     # Flow-only canvas tools live on the same row and appear only on Flow.
     assert dashboard.flow_tools.isHidden()
@@ -216,25 +218,38 @@ def test_registry_typed_sorting_and_autocomplete(service, qapp):
     assert inspector_left - table_right >= 12
     assert registry.splitter.handleWidth() == PANE_GUTTER
 
-    registry._sort_by_column(1)  # state ascending
+    # Tasks open on the operational Status priority: Blocked → Ready →
+    # Completed → Deferred, alphabetized by task name inside each status.
+    assert registry.sort_key == "state"
+    assert registry.sort_ascending is True
+    default_states = [
+        registry.table.item(row, 1).text()
+        for row in range(registry.table.rowCount())
+    ]
+    assert default_states == [
+        "Blocked",
+        "Ready",
+        "Ready",
+        "Completed",
+        "Deferred",
+    ]
+    assert "▲" in registry.table.horizontalHeaderItem(1).text()
+
+    registry._sort_by_column(1)  # STATUS flips to descending
     qapp.processEvents()
     states = [
         registry.table.item(row, 1).text() for row in range(registry.table.rowCount())
     ]
-    assert states == sorted(states)
-    assert states == [
-        "Blocked",
-        "Completed",
-        "Deferred",
-        "Ready",
-        "Ready",
-    ]
-    assert "▲" in registry.table.horizontalHeaderItem(1).text()
-
-    registry._sort_by_column(1)  # state descending
-    qapp.processEvents()
+    assert states == list(reversed(default_states))
     assert registry.table.horizontalHeaderItem(1).text().endswith("▼")
-    assert registry.table.item(0, 1).text() == "Ready"
+
+    registry._sort_by_column(1)  # and back to the operational ascending order
+    qapp.processEvents()
+    states = [
+        registry.table.item(row, 1).text() for row in range(registry.table.rowCount())
+    ]
+    assert states == default_states
+    assert registry.table.horizontalHeaderItem(1).text().endswith("▲")
 
     registry._sort_by_column(2)  # conditions numeric count
     qapp.processEvents()
@@ -1181,5 +1196,325 @@ def test_calendar_auto_syncs_stale_credentials_and_shows_a_green_banner(
         f"{completed_at.strftime('%b %d, %H:%M')}"
     )
     assert f"color: {theme_color('green')}" in calendar.warning.styleSheet()
+    window.close()
+    qapp.processEvents()
+
+
+def test_text_size_presets_scale_fs_with_a_readable_floor(service, qapp):
+    """The three Text size presets persist and ``fs`` never drops below 8 px."""
+    from efos_app.config import load_ui_state
+    from efos_app.ui import theme as theme_module
+
+    original = theme_module._FONT_PRESET
+    try:
+        set_font_scale("standard")
+        # The 8 px floor protects small authored sizes at the default preset.
+        assert fs(1) == 8
+        assert fs(7) == 8
+        assert fs(8) == 8
+        assert fs(13) == 13
+        assert fs(24) == 24
+
+        set_font_scale("large")
+        # 8-11 px labels are lifted to a legible 13 px floor.
+        assert fs(8) == 13
+        assert fs(10) == 13
+        assert fs(11) == 13
+        assert fs(12) == round(12 * 1.15)
+        assert fs(24) == round(24 * 1.15)
+
+        set_font_scale("xlarge")
+        assert fs(8) == 15
+        assert fs(10) == 15
+        assert fs(11) == 15
+        assert fs(12) == round(12 * 1.30)
+        assert fs(24) == round(24 * 1.30)
+    finally:
+        set_font_scale(original)
+
+    assert [label for label, _code in FONT_SIZE_OPTIONS] == [
+        "Default",
+        "Large",
+        "Extra Large",
+    ]
+    assert FONT_SCALE_TO_CODE == {"standard": 0, "large": 1, "xlarge": 2}
+    assert CODE_TO_FONT_SCALE == {0: "standard", 1: "large", 2: "xlarge"}
+
+    window = _window(service, qapp, "font_size.json")
+    window.change_font_scale("large")
+    qapp.processEvents()
+    assert window._font_scale == "large"
+    assert load_ui_state().get("font_scale") == "large"
+    assert fs(10) >= 13
+    # The page heading picks up the scaled size instead of a literal string.
+    assert f"font-size: {fs(24)}px" in window.page_title.styleSheet()
+    window.change_font_scale("xlarge")
+    qapp.processEvents()
+    assert window._font_scale == "xlarge"
+    assert load_ui_state().get("font_scale") == "xlarge"
+    assert fs(10) >= 15
+    window.close()
+    qapp.processEvents()
+
+    reopened = _window(service, qapp, "font_size_reopened.json")
+    assert reopened._font_scale == "xlarge"
+    observed: dict[str, object] = {}
+
+    def interact() -> None:
+        dialog = reopened._settings_dialog
+        if dialog is None:
+            return
+        observed["labels"] = [
+            label.text() for label in dialog.font_choices.findChildren(QLabel)
+        ]
+        observed["codes"] = sorted(dialog.font_boxes)
+        observed["checked"] = [
+            value for value, box in dialog.font_boxes.items() if box.isChecked()
+        ]
+        dialog._close()
+
+    QTimer.singleShot(80, interact)
+    reopened.open_settings()
+    qapp.processEvents()
+    assert observed.get("labels") == ["Default", "Large", "Extra Large"]
+    assert observed.get("codes") == [0, 1, 2]
+    assert observed.get("checked") == [2]
+
+    # Restore the local default so later windows open at the standard scale.
+    reopened.change_font_scale("standard")
+    qapp.processEvents()
+    assert load_ui_state().get("font_scale") == "standard"
+    assert fs(10) == 10
+    reopened.close()
+    qapp.processEvents()
+
+
+def test_registry_defaults_to_operational_status_priority(service, qapp):
+    """Tasks open sorted Blocked → Ready → Completed → Deferred by name."""
+    ready_a = service.create_task("Alpha ready")
+    ready_b = service.create_task("Beta ready")
+    done = service.create_task("Gamma done")
+    service.complete_task(done)
+    parked = service.create_task("Delta parked")
+    service.defer_task(parked)
+    gate = service.create_condition("Blocking gate", evaluation_state=False)
+    blocked_a = service.create_task("Echo blocked")
+    blocked_b = service.create_task("Zulu blocked")
+    service.connect(NodeRef(NodeKind.CONDITION, gate), NodeRef(NodeKind.TASK, blocked_a))
+    service.connect(NodeRef(NodeKind.CONDITION, gate), NodeRef(NodeKind.TASK, blocked_b))
+    service.load_view()
+
+    window = _window(service, qapp, "registry_status.json")
+    window.set_page(2)
+    qapp.processEvents()
+    registry = window.registry
+    assert registry.kind is NodeKind.TASK
+    assert registry.sort_key == "state"
+    assert registry.sort_ascending is True
+
+    def column_texts(column: int) -> list[str]:
+        return [
+            registry.table.item(row, column).text()
+            for row in range(registry.table.rowCount())
+        ]
+
+    assert column_texts(1) == [
+        "Blocked",
+        "Blocked",
+        "Ready",
+        "Ready",
+        "Completed",
+        "Deferred",
+    ]
+    # Alphabetical inside each status group.
+    assert column_texts(0) == [
+        "Echo blocked",
+        "Zulu blocked",
+        "Alpha ready",
+        "Beta ready",
+        "Gamma done",
+        "Delta parked",
+    ]
+    assert "▲" in registry.table.horizontalHeaderItem(1).text()
+    assert "Blocked → Ready → Completed → Deferred" in registry.sort_label.text()
+
+    # Column clicks still toggle direction and re-sort the same priority.
+    registry._sort_by_column(1)
+    qapp.processEvents()
+    assert registry.table.horizontalHeaderItem(1).text().endswith("▼")
+    assert column_texts(1)[0] == "Deferred"
+    registry._sort_by_column(1)
+    qapp.processEvents()
+    assert registry.table.horizontalHeaderItem(1).text().endswith("▲")
+    assert column_texts(1)[0] == "Blocked"
+
+    # Every other header keeps working, alphabetically by task name.
+    registry._sort_by_column(0)
+    qapp.processEvents()
+    names = column_texts(0)
+    assert names == sorted(names)
+    assert "▲" in registry.table.horizontalHeaderItem(0).text()
+
+    # Returning to Tasks restores the operational default, not the last click.
+    registry._sort_by_column(2)
+    qapp.processEvents()
+    registry._change_filter(1)
+    qapp.processEvents()
+    assert registry.sort_key == "state"
+    assert registry.sort_ascending is True
+    assert column_texts(1)[0] == "Blocked"
+    window.close()
+    qapp.processEvents()
+
+
+def test_dashboard_toolbar_is_pinned_to_the_left_workspace_column(service, qapp):
+    """The toolbar spans only the left column and centres its view title."""
+    service.create_task("Toolbar task")
+    window = _window(service, qapp, "toolbar_alignment.json")
+    window.set_page(1)
+    dashboard = window.dashboard
+    dashboard.show_manage()
+    qapp.processEvents()
+
+    def column_span() -> tuple[int, int]:
+        splitter = dashboard._active_splitter()
+        left = dashboard.toolbar.mapTo(dashboard, QPoint(0, 0)).x()
+        return left, left + splitter.sizes()[0]
+
+    def content_span() -> tuple[int, int]:
+        left = dashboard.left_toolbar.mapTo(dashboard, QPoint(0, 0)).x()
+        return left, left + dashboard.left_toolbar.width()
+
+    def title_centre() -> int:
+        title = dashboard.canvas_title
+        return title.mapTo(dashboard, QPoint(title.width() // 2, 0)).x()
+
+    column_left, column_right = column_span()
+    content_left, content_right = content_span()
+    # The right toolbar zone matches the Inspector pane width across the gutter.
+    assert dashboard.toolbar_gutter.width() == PANE_GUTTER
+    assert dashboard.right_toolbar.width() == dashboard.splitter.sizes()[1]
+    assert content_left == column_left
+    assert abs(content_right - column_right) <= 2
+    assert dashboard.tabs.mapTo(dashboard, QPoint(0, 0)).x() == column_left
+    assert dashboard.canvas_title.text() == "Active Workspace"
+    centre = title_centre()
+    assert column_left + (column_right - column_left) * 0.2 <= centre <= (
+        column_left + (column_right - column_left) * 0.8
+    )
+    title_left = dashboard.canvas_title.mapTo(dashboard, QPoint(0, 0)).x()
+    title_right = title_left + dashboard.canvas_title.width()
+    tabs_right = dashboard.tabs.mapTo(dashboard, QPoint(dashboard.tabs.width(), 0)).x()
+    assert title_left >= tabs_right
+
+    dashboard.show_flow()
+    qapp.processEvents()
+    assert dashboard.canvas_title.text() == "Dependency Canvas"
+    assert not dashboard.flow_tools.isHidden()
+    column_left, column_right = column_span()
+    content_left, content_right = content_span()
+    assert content_left == column_left
+    assert abs(content_right - column_right) <= 2
+    centre = title_centre()
+    assert column_left + (column_right - column_left) * 0.2 <= centre <= (
+        column_left + (column_right - column_left) * 0.8
+    )
+    title_left = dashboard.canvas_title.mapTo(dashboard, QPoint(0, 0)).x()
+    title_right = title_left + dashboard.canvas_title.width()
+    tools_left = dashboard.flow_tools.mapTo(dashboard, QPoint(0, 0)).x()
+    tools_right = tools_left + dashboard.flow_tools.width()
+    assert title_right <= tools_left
+    visible_actions = [
+        button for button in dashboard._create_buttons if not button.isHidden()
+    ]
+    assert abs(tools_right - content_right) <= 2
+    assert all(not button.isHidden() for button in dashboard._create_buttons)
+    first_left = dashboard._create_buttons[0].mapTo(dashboard, QPoint(0, 0)).x()
+    assert first_left >= column_right + PANE_GUTTER - 2
+
+    # A narrower window keeps the same left-column alignment.
+    window.resize(1280, 800)
+    qapp.processEvents()
+    dashboard.sync_toolbar()
+    qapp.processEvents()
+    column_left, column_right = column_span()
+    content_left, content_right = content_span()
+    assert content_left == column_left
+    assert abs(content_right - column_right) <= 2
+    assert column_left + (column_right - column_left) * 0.2 <= title_centre() <= (
+        column_left + (column_right - column_left) * 0.8
+    )
+    window.close()
+    qapp.processEvents()
+
+def test_flow_zoom_and_toolbar_survive_interface_rebuilds(service, qapp):
+    """Theme/font rebuilds keep the Flow zoom, centre, tab, and toolbar state."""
+    for name in ("Flow alpha", "Flow beta"):
+        service.create_task(name)
+    window = _window(service, qapp, "flow_state.json")
+    window.set_page(1)
+    dashboard = window.dashboard
+    dashboard.show_flow()
+    qapp.processEvents()
+    QTest.qWait(90)
+    qapp.processEvents()
+    viewport = dashboard.flow.viewport
+    viewport.reset_view()
+    viewport.zoom_in()
+    viewport.zoom_in()
+    node = next(iter(dashboard.flow.scene.node_items.values()))
+    viewport.centerOn(node.mapToScene(0, 0))
+    qapp.processEvents()
+    expected_zoom = viewport.transform().m11()
+    expected_centre = viewport.mapToScene(viewport.viewport().rect().center())
+    assert expected_zoom > 1.2
+
+    window._rebuild_interface(
+        index=1,
+        selected=None,
+        manage_tab=1,
+        thread=None,
+        calendar_mode="week",
+        calendar_anchor=window.calendar.anchor,
+        flow_pending=False,
+    )
+    qapp.processEvents()
+    QTest.qWait(140)
+    qapp.processEvents()
+    dashboard = window.dashboard
+    viewport = dashboard.flow.viewport
+    assert dashboard.stack.currentIndex() == 1
+    assert dashboard.tabs.current() == 1
+    assert not dashboard.flow_tools.isHidden()
+    assert dashboard.canvas_title.text() == "Dependency Canvas"
+    # The create actions and canvas tools still share the aligned toolbar row.
+    assert dashboard.toolbar.height() == TOOLBAR_HEIGHT
+    assert abs(viewport.transform().m11() - expected_zoom) < 0.03
+    centre = viewport.mapToScene(viewport.viewport().rect().center())
+    assert abs(centre.x() - expected_centre.x()) < 60
+    assert abs(centre.y() - expected_centre.y()) < 60
+
+    # A font rebuild and a theme rebuild both preserve the same viewport state.
+    for kind, apply_change in (
+        ("font", lambda: window.change_font_scale("large")),
+        (
+            "theme",
+            lambda: window.change_theme_value(
+                2 if current_theme_value() != 2 else 4
+            ),
+        ),
+    ):
+        before = window.dashboard.flow.viewport.transform().m11()
+        assert apply_change() is True
+        qapp.processEvents()
+        QTest.qWait(140)
+        qapp.processEvents()
+        dashboard = window.dashboard
+        assert dashboard.stack.currentIndex() == 1, kind
+        assert not dashboard.flow_tools.isHidden(), kind
+        assert abs(dashboard.flow.viewport.transform().m11() - before) < 0.03, kind
+
+    window.change_font_scale("standard")
+    qapp.processEvents()
     window.close()
     qapp.processEvents()

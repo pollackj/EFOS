@@ -98,8 +98,7 @@ def _status_for(snapshot: WorkspaceSnapshot, precondition_ids: Iterable[str], pr
 
 def evaluate_workspace(snapshot: WorkspaceSnapshot) -> Evaluation:
     evaluation = Evaluation()
-    for condition in snapshot.conditions.values():
-        evaluation.condition_values[condition.id] = condition.evaluation_state
+    for condition in snapshot.conditions.values(): evaluation.condition_values[condition.id] = condition.evaluation_state
     for task in snapshot.tasks.values():
         evaluation.tasks[task.id] = _status_for(
             snapshot,
@@ -120,18 +119,15 @@ def evaluate_workspace(snapshot: WorkspaceSnapshot) -> Evaluation:
 def prerequisite_adjacency(snapshot: WorkspaceSnapshot) -> dict[str, set[str]]:
     adjacency: dict[str, set[str]] = {}
     for ref in snapshot.all_refs():
-        if ref.kind is not NodeKind.CONDITION:
-            adjacency.setdefault(ref.key, set())
+        if ref.kind is not NodeKind.CONDITION: adjacency.setdefault(ref.key, set())
     for task_id, sources in snapshot.task_prerequisites.items():
         target = NodeRef(NodeKind.TASK, task_id).key
         adjacency.setdefault(target, set())
-        for source in sources:
-            adjacency.setdefault(source.key, set()).add(target)
+        for source in sources: adjacency.setdefault(source.key, set()).add(target)
     for project_id, sources in snapshot.project_prerequisites.items():
         target = NodeRef(NodeKind.PROJECT, project_id).key
         adjacency.setdefault(target, set())
-        for source in sources:
-            adjacency.setdefault(source.key, set()).add(target)
+        for source in sources: adjacency.setdefault(source.key, set()).add(target)
     for task_id, condition_ids in snapshot.task_preconditions.items():
         target = NodeRef(NodeKind.TASK, task_id).key
         for condition_id in condition_ids:
@@ -157,8 +153,7 @@ def find_cycle_with_edge(snapshot: WorkspaceSnapshot, source_key: str, target_ke
             if color.get(neighbor, WHITE) == WHITE:
                 parent[neighbor] = node
                 found = visit(neighbor)
-                if found:
-                    return found
+                if found: return found
             elif color.get(neighbor) == GRAY:
                 cycle = [neighbor]
                 cursor = node
@@ -174,28 +169,20 @@ def find_cycle_with_edge(snapshot: WorkspaceSnapshot, source_key: str, target_ke
     for node in sorted(adjacency):
         if color[node] == WHITE:
             cycle = visit(node)
-            if cycle:
-                return cycle
+            if cycle: return cycle
     return []
 
 def describe_cycle(snapshot: WorkspaceSnapshot, cycles: Iterable[str]) -> str:
     labels: list[str] = []
     for key in cycles:
-        try:
-            labels.append(snapshot.get_name(NodeRef.parse(key)))
-        except (ValueError, KeyError):
-            labels.append(key)
+        try: labels.append(snapshot.get_name(NodeRef.parse(key)))
+        except (ValueError, KeyError): labels.append(key)
     return " → ".join(labels)
 
-def validate_connection(
-    snapshot: WorkspaceSnapshot, source: NodeRef, target: NodeRef
-) -> EdgeKind:
-    if not snapshot.exists(source):
-        raise NotFoundError(f"The source {source.kind.value} no longer exists.")
-    if not snapshot.exists(target):
-        raise NotFoundError(f"The target {target.kind.value} no longer exists.")
-    if source == target:
-        raise ConflictError("A node cannot depend on itself.")
+def validate_connection(snapshot: WorkspaceSnapshot, source: NodeRef, target: NodeRef) -> EdgeKind:
+    if not snapshot.exists(source): raise NotFoundError(f"The source {source.kind.value} no longer exists.")
+    if not snapshot.exists(target): raise NotFoundError(f"The target {target.kind.value} no longer exists.")
+    if source == target: raise ConflictError("A node cannot depend on itself.")
     if target.kind is NodeKind.PROJECT:
         project = snapshot.projects.get(target.id)
         if project and project.current_state is ProjectState.RESOLVED:
@@ -219,15 +206,12 @@ def validate_connection(
         if target.kind not in (NodeKind.TASK, NodeKind.PROJECT):
             raise ValidationError("A Condition can only target a Task or Project.")
         current = snapshot.preconditions_for(target)
-        if source.id in current:
-            raise ConflictError("That precondition is already attached.")
+        if source.id in current: raise ConflictError("That precondition is already attached.")
         cycle = find_cycle_with_edge(snapshot, source.key, target.key)
-        if cycle:
-            raise ConflictError("Circular dependency rejected: " + describe_cycle(snapshot, cycle))
+        if cycle: raise ConflictError("Circular dependency rejected: " + describe_cycle(snapshot, cycle))
         return EdgeKind.PRECONDITION
     # Task or Project source → Task or Project target.
-    if source in snapshot.prerequisites_for(target):
-        raise ConflictError("That prerequisite is already attached.")
+    if source in snapshot.prerequisites_for(target): raise ConflictError("That prerequisite is already attached.")
     cycle = find_cycle_with_edge(snapshot, source.key, target.key)
     if cycle:
         raise ConflictError(
@@ -237,10 +221,8 @@ def validate_connection(
     return EdgeKind.PREREQUISITE
 
 def validate_new_entity_connection(snapshot: WorkspaceSnapshot, kind: NodeKind, source: NodeRef) -> None:
-    if kind is NodeKind.CONDITION:
-        raise ValidationError("Conditions cannot target other Conditions.")
-    if source.kind is NodeKind.CONDITION:
-        return
+    if kind is NodeKind.CONDITION: raise ValidationError("Conditions cannot target other Conditions.")
+    if source.kind is NodeKind.CONDITION: return
     raise ValidationError("Unsupported dependency direction.")
 
 # ---------------------------------------------------------------------------
@@ -252,42 +234,34 @@ class ReconcilePlan:
     project_targets: dict[str, ProjectState] = field(default_factory=dict)
 
     @property
-    def empty(self) -> bool:
-        return not self.task_targets and not self.project_targets
+    def empty(self) -> bool: return not self.task_targets and not self.project_targets
 
 def reconcile_plan(snapshot: WorkspaceSnapshot, evaluation: Evaluation) -> ReconcilePlan:
     plan = ReconcilePlan()
     for task in snapshot.tasks.values():
-        if not task.current_state.is_active:
-            continue
+        if not task.current_state.is_active: continue
         status = evaluation.task_status(task.id)
         desired = TaskState.READY if status.ready else TaskState.BLOCKED
-        if desired is not task.current_state:
-            plan.task_targets[task.id] = desired
+        if desired is not task.current_state: plan.task_targets[task.id] = desired
     for project in snapshot.projects.values():
         # Automated resolution applies only to active projects. Stalled and
         # shelved projects require an explicit administrative state change.
-        if project.current_state is not ProjectState.ACTIVE:
-            continue
-        if project.resolution_conditions_unknown:
-            continue
+        if project.current_state is not ProjectState.ACTIVE: continue
+        if project.resolution_conditions_unknown: continue
         status = evaluation.project_status(project.id)
-        if status.ready:
-            plan.project_targets[project.id] = ProjectState.RESOLVED
+        if status.ready: plan.project_targets[project.id] = ProjectState.RESOLVED
     return plan
 
 # ---------------------------------------------------------------------------
 # Recommendation cascade
 # ---------------------------------------------------------------------------
 def _upcoming_window(task, now: datetime) -> bool:
-    if not task.has_schedule:
-        return False
+    if not task.has_schedule: return False
     assert task.scheduled_start is not None and task.scheduled_end is not None
     return task.scheduled_start <= now + timedelta(days=7) and task.scheduled_end >= now
 
 def _schedule_urgency_score(task, now: datetime) -> int:
-    if not task.has_schedule or task.scheduled_start is None:
-        return 0
+    if not task.has_schedule or task.scheduled_start is None: return 0
     end = task.scheduled_end or task.scheduled_start
     if task.scheduled_start <= now <= end:
         return 25  # Active right now
@@ -315,10 +289,8 @@ def active_task_ranking(snapshot: WorkspaceSnapshot, evaluation: Evaluation, now
     now = now or datetime.now()
     candidates = []
     for task in snapshot.tasks.values():
-        if task.current_state is not TaskState.READY:
-            continue
-        if not evaluation.task_status(task.id).ready:
-            continue
+        if task.current_state is not TaskState.READY: continue
+        if not evaluation.task_status(task.id).ready: continue
         candidates.append(task)
     candidates.sort(key=lambda task: _active_sort_key(snapshot, task, now))
     ranked: list[PriorityItem] = []
@@ -330,11 +302,8 @@ def active_task_ranking(snapshot: WorkspaceSnapshot, evaluation: Evaluation, now
                 f"Unblocks {downstream} downstream "
                 f"{'Task' if downstream == 1 else 'Tasks'}"
             )
-        if task.has_schedule and task.scheduled_start:
-            parts.append(f"Scheduled {task.scheduled_start:%a %b %d, %H:%M}")
-        ranked.append(
-            PriorityItem(index, NodeRef(NodeKind.TASK, task.id), task.name, ". ".join(parts) + ".")
-        )
+        if task.has_schedule and task.scheduled_start: parts.append(f"Scheduled {task.scheduled_start:%a %b %d, %H:%M}")
+        ranked.append(PriorityItem(index, NodeRef(NodeKind.TASK, task.id), task.name, ". ".join(parts) + "."))
     return ranked
 
 def recommend(snapshot: WorkspaceSnapshot, evaluation: Evaluation, now: datetime | None = None) -> Recommendation | None:
@@ -352,13 +321,10 @@ def recommend(snapshot: WorkspaceSnapshot, evaluation: Evaluation, now: datetime
     # Tier 2 — critical milestone: > 50% of direct requirements TRUE.
     milestones = []
     for project in snapshot.projects.values():
-        if project.current_state is not ProjectState.ACTIVE:
-            continue
-        if project.resolution_conditions_unknown:
-            continue
+        if project.current_state is not ProjectState.ACTIVE: continue
+        if project.resolution_conditions_unknown: continue
         status = evaluation.project_status(project.id)
-        if status.total and status.ratio > 0.5:
-            milestones.append((status.ratio, status.satisfied, project))
+        if status.total and status.ratio > 0.5: milestones.append((status.ratio, status.satisfied, project))
     milestones.sort(key=lambda row: (-row[0], -row[1], row[2].name.casefold()))
     if milestones:
         ratio, satisfied, project = milestones[0]
@@ -388,11 +354,9 @@ def recommend(snapshot: WorkspaceSnapshot, evaluation: Evaluation, now: datetime
     # Tier 4 — revisit candidate: shelved with zero unresolved precondition blocks.
     revisits = []
     for project in snapshot.projects.values():
-        if project.current_state is not ProjectState.SHELVED:
-            continue
+        if project.current_state is not ProjectState.SHELVED: continue
         status = evaluation.project_status(project.id)
-        if all(value is True for value in status.precondition_values.values()):
-            revisits.append(project)
+        if all(value is True for value in status.precondition_values.values()): revisits.append(project)
     revisits.sort(key=lambda p: p.name.casefold())
     if revisits:
         project = revisits[0]
@@ -441,10 +405,8 @@ def priority_narrative(snapshot: WorkspaceSnapshot, evaluation: Evaluation, now:
 # ---------------------------------------------------------------------------
 def _month_day(year: int, month: int, day: int) -> date | None:
     last = calendar.monthrange(year, month)[1]
-    if day < 0:
-        day = last + day + 1
-    if 1 <= day <= last:
-        return date(year, month, day)
+    if day < 0: day = last + day + 1
+    if 1 <= day <= last: return date(year, month, day)
     return None
 
 def _add_months(year: int, month: int, offset: int) -> tuple[int, int]:
@@ -482,8 +444,7 @@ def latest_occurrence(rule: RecurrenceRule, now: datetime) -> datetime | None:
                 candidate = base + timedelta(days=weekday)
                 candidates.append(candidate)
             previous = base - timedelta(weeks=interval)
-            for weekday in weekdays:
-                candidates.append(previous + timedelta(days=weekday))
+            for weekday in weekdays: candidates.append(previous + timedelta(days=weekday))
 
     elif rule.frequency is RecurrenceFrequency.MONTHLY:
         months = (today.year - anchor.year) * 12 + (today.month - anchor.month)
@@ -492,8 +453,7 @@ def latest_occurrence(rule: RecurrenceRule, now: datetime) -> datetime | None:
             for offset in ((months // interval) * interval, ((months // interval) * interval) - interval):
                 year, month = _add_months(anchor.year, anchor.month, offset)
                 candidate = _month_day(year, month, day)
-                if candidate:
-                    candidates.append(candidate)
+                if candidate: candidates.append(candidate)
 
     else:  # YEARLY
         years = today.year - anchor.year
@@ -502,26 +462,20 @@ def latest_occurrence(rule: RecurrenceRule, now: datetime) -> datetime | None:
             day = rule.by_month_day if rule.by_month_day is not None else anchor.day
             for offset in ((years // interval) * interval, ((years // interval) * interval) - interval):
                 candidate = _month_day(anchor.year + offset, month, day)
-                if candidate:
-                    candidates.append(candidate)
+                if candidate: candidates.append(candidate)
 
     best: datetime | None = None
     for candidate in candidates:
         moment = datetime.combine(candidate, clock)
-        if moment > now:
-            continue
-        if rule.until_date is not None and moment > rule.until_date:
-            continue
-        if best is None or moment > best:
-            best = moment
+        if moment > now: continue
+        if rule.until_date is not None and moment > rule.until_date: continue
+        if best is None or moment > best: best = moment
     return best
 
 def recurrence_due(rule: RecurrenceRule, now: datetime) -> datetime | None:
     occurrence = latest_occurrence(rule, now)
-    if occurrence is None:
-        return None
-    if rule.last_reset_window is not None and rule.last_reset_window >= occurrence:
-        return None
+    if occurrence is None: return None
+    if rule.last_reset_window is not None and rule.last_reset_window >= occurrence: return None
     return occurrence
 
 def next_occurrence(rule: RecurrenceRule, after: datetime) -> datetime | None:
@@ -529,23 +483,18 @@ def next_occurrence(rule: RecurrenceRule, after: datetime) -> datetime | None:
     for _ in range(400):
         probe = probe + timedelta(days=1)
         occurrence = latest_occurrence(rule, probe)
-        if occurrence is not None and occurrence > after:
-            return occurrence
+        if occurrence is not None and occurrence > after: return occurrence
     return None
 
 def gate_summary(snapshot: WorkspaceSnapshot, evaluation: Evaluation, ref: NodeRef) -> str:
     status = evaluation.for_ref(ref)
-    if status is None:
-        return ""
-    if status.total == 0:
-        return "No dependencies · satisfied by default"
+    if status is None: return ""
+    if status.total == 0: return "No dependencies · satisfied by default"
     return f"{status.satisfied}/{status.total} requirements satisfied"
 
 def condition_truth_label(value: bool | None) -> str:
-    if value is True:
-        return "TRUE"
-    if value is False:
-        return "FALSE"
+    if value is True: return "TRUE"
+    if value is False: return "FALSE"
     return "UNKNOWN"
 
 # ---------------------------------------------------------------------------
@@ -556,13 +505,11 @@ AVAILABILITY_DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
 MINUTES_PER_DAY = 24 * 60
 
 def _local_naive(moment: datetime) -> datetime:
-    if moment.tzinfo is not None:
-        moment = moment.astimezone().replace(tzinfo=None)
+    if moment.tzinfo is not None: moment = moment.astimezone().replace(tzinfo=None)
     return moment.replace(second=0, microsecond=0)
 
 def _clock_text(minutes: int) -> str:
-    if minutes >= MINUTES_PER_DAY:
-        return "24:00"
+    if minutes >= MINUTES_PER_DAY: return "24:00"
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 def normalize_availability_windows(windows: Iterable[AvailabilityWindow]) -> list[AvailabilityWindow]:
@@ -587,13 +534,11 @@ def normalize_availability_windows(windows: Iterable[AvailabilityWindow]) -> lis
             raise ValidationError("Availability start time must be within the selected day.")
         if not 0 < end <= MINUTES_PER_DAY:
             raise ValidationError("Availability end time must be within the selected day.")
-        if start == end:
-            raise ValidationError("An availability window cannot start and end at the same time.")
+        if start == end: raise ValidationError("An availability window cannot start and end at the same time.")
         if end < start:
             result.append(AvailabilityWindow(weekday, start, MINUTES_PER_DAY))
             result.append(AvailabilityWindow((weekday + 1) % 7, 0, end))
-        else:
-            result.append(AvailabilityWindow(weekday, start, end))
+        else: result.append(AvailabilityWindow(weekday, start, end))
     unique = sorted({window.key for window in result})
     return [AvailabilityWindow(*key) for key in unique]
 
@@ -604,8 +549,7 @@ def availability_is_open(windows: Iterable[AvailabilityWindow], moment: datetime
     function never participates in dependency evaluation or Task state.
     """
     window_list = list(windows)
-    if not window_list:
-        return True
+    if not window_list: return True
     moment = _local_naive(moment or datetime.now())
     minutes = moment.hour * 60 + moment.minute
     return any(
@@ -616,34 +560,27 @@ def availability_is_open(windows: Iterable[AvailabilityWindow], moment: datetime
 
 def next_availability_start(windows: Iterable[AvailabilityWindow], moment: datetime | None = None) -> datetime | None:
     window_list = list(windows)
-    if not window_list:
-        return None
+    if not window_list: return None
     moment = _local_naive(moment or datetime.now())
     midnight = moment.replace(hour=0, minute=0, second=0, microsecond=0)
     best: datetime | None = None
     for window in window_list:
         candidate = midnight + timedelta(days=(window.weekday - moment.weekday()) % 7, minutes=window.start_minute)
-        if candidate <= moment:
-            candidate += timedelta(days=7)
-        if best is None or candidate < best:
-            best = candidate
+        if candidate <= moment: candidate += timedelta(days=7)
+        if best is None or candidate < best: best = candidate
     return best
 
 def availability_state_text(windows: Iterable[AvailabilityWindow], moment: datetime | None = None) -> str:
     window_list = list(windows)
-    if not window_list:
-        return "open 24/7"
-    if availability_is_open(window_list, moment):
-        return "available now"
+    if not window_list: return "open 24/7"
+    if availability_is_open(window_list, moment): return "available now"
     upcoming = next_availability_start(window_list, moment)
-    if upcoming is None:
-        return "outside availability"
+    if upcoming is None: return "outside availability"
     return f"outside availability · opens {upcoming:%a %H:%M}"
 
 def _format_availability_days(days: list[int]) -> str:
     ordered = sorted(days)
-    if ordered == list(range(7)):
-        return "Every day"
+    if ordered == list(range(7)): return "Every day"
     runs: list[tuple[int, int]] = []
     start = previous = ordered[0]
     for day in ordered[1:]:
@@ -655,25 +592,20 @@ def _format_availability_days(days: list[int]) -> str:
     runs.append((start, previous))
     parts: list[str] = []
     for first, last in runs:
-        if first == last:
-            parts.append(AVAILABILITY_DAY_LABELS[first])
-        else:
-            parts.append(f"{AVAILABILITY_DAY_LABELS[first]}–{AVAILABILITY_DAY_LABELS[last]}")
+        if first == last: parts.append(AVAILABILITY_DAY_LABELS[first])
+        else: parts.append(f"{AVAILABILITY_DAY_LABELS[first]}–{AVAILABILITY_DAY_LABELS[last]}")
     return ", ".join(parts)
 
 def availability_summary(windows: Iterable[AvailabilityWindow]) -> str:
     """Human-readable availability, distinct from Status, schedule, and recurrence."""
     window_list = list(windows)
-    if not window_list:
-        return "24/7 — always available"
+    if not window_list: return "24/7 — always available"
     by_day: dict[int, list[tuple[int, int]]] = {day: [] for day in range(7)}
-    for window in window_list:
-        by_day[window.weekday].append((window.start_minute, window.end_minute))
+    for window in window_list: by_day[window.weekday].append((window.start_minute, window.end_minute))
     groups: dict[tuple[tuple[int, int], ...], list[int]] = {}
     for day in range(7):
         spans = tuple(sorted(by_day[day]))
-        if spans:
-            groups.setdefault(spans, []).append(day)
+        if spans: groups.setdefault(spans, []).append(day)
     parts: list[str] = []
     for spans, days in sorted(groups.items(), key=lambda item: (item[1][0], item[0])):
         span_text = ", ".join(f"{_clock_text(start)}–{_clock_text(end)}" for start, end in spans)

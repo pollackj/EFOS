@@ -42,7 +42,7 @@ from ..models import (
 )
 from ..service import WorkspaceView
 from .icons import draw_icon
-from .theme import c, rgba, state_color
+from .theme import c, fs, rgba, state_color
 
 NODE_WIDTH = 252.0
 NODE_HEIGHT = 124.0
@@ -65,10 +65,8 @@ class LayoutStore:
     def load(self) -> None:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self._data = raw
-        except (OSError, ValueError):
-            self._data = {}
+            if isinstance(raw, dict): self._data = raw
+        except (OSError, ValueError): self._data = {}
 
     def positions(self) -> dict[str, tuple[float, float]]:
         bucket = self._data.get(self.namespace, {})
@@ -76,19 +74,15 @@ class LayoutStore:
         if isinstance(bucket, dict):
             for key, value in bucket.items():
                 if isinstance(value, list) and len(value) == 2:
-                    try:
-                        result[key] = (float(value[0]), float(value[1]))
-                    except (TypeError, ValueError):
-                        continue
+                    try: result[key] = (float(value[0]), float(value[1]))
+                    except (TypeError, ValueError): continue
         return result
 
     def set_position(self, key: str, x: float, y: float) -> None:
         self._data.setdefault(self.namespace, {})[key] = [round(x, 2), round(y, 2)]
 
     def set_positions(self, positions: dict[str, tuple[float, float]]) -> None:
-        self._data[self.namespace] = {
-            key: [round(x, 2), round(y, 2)] for key, (x, y) in positions.items()
-        }
+        self._data[self.namespace] = {key: [round(x, 2), round(y, 2)] for key, (x, y) in positions.items()}
 
     def save(self) -> None:
         try:
@@ -96,8 +90,7 @@ class LayoutStore:
             temporary = self.path.with_suffix(".tmp")
             temporary.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
             temporary.replace(self.path)
-        except OSError:
-            return
+        except OSError: return
 
 class PortItem(QGraphicsItem):
     def __init__(self, parent: "FlowNodeItem", role: str):
@@ -115,8 +108,7 @@ class PortItem(QGraphicsItem):
         self._hover = False
         self.setPos(QPointF(0 if role == "in" else NODE_WIDTH, NODE_HEIGHT / 2))
 
-    def boundingRect(self) -> QRectF:
-        return QRectF(-8, -8, 16, 16)
+    def boundingRect(self) -> QRectF: return QRectF(-8, -8, 16, 16)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # type: ignore[no-untyped-def]
         color = QColor(c(KIND_COLOR[self.node.ref.kind]))
@@ -165,30 +157,26 @@ class FlowNodeItem(QGraphicsObject):
         self.setZValue(10)
         self.in_port = PortItem(self, "in")
         self.out_port = PortItem(self, "out")
-        self._font_kind = QFont("Segoe UI", 7)
+        self._font_kind = QFont("Segoe UI", fs(7))
         self._font_kind.setBold(True)
         self._font_kind.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
-        self._font_title = QFont("Segoe UI Variable Display", 11)
+        self._font_title = QFont("Segoe UI Variable Display", fs(11))
         self._font_title.setWeight(QFont.Weight.DemiBold)
-        self._font_body = QFont("Segoe UI", 8)
+        self._font_body = QFont("Segoe UI", fs(8))
         self._font_body.setWeight(QFont.Weight.Medium)
-        self._font_chip = QFont("Segoe UI", 7)
+        self._font_chip = QFont("Segoe UI", fs(7))
         self._font_chip.setBold(True)
         self._font_chip.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.6)
 
     @property
-    def key(self) -> str:
-        return self.ref.key
+    def key(self) -> str: return self.ref.key
 
     @property
-    def color(self) -> str:
-        return c(KIND_COLOR[self.ref.kind])
+    def color(self) -> str: return c(KIND_COLOR[self.ref.kind])
 
-    def content_rect(self) -> QRectF:
-        return QRectF(0, 0, NODE_WIDTH, NODE_HEIGHT)
+    def content_rect(self) -> QRectF: return QRectF(0, 0, NODE_WIDTH, NODE_HEIGHT)
 
-    def boundingRect(self) -> QRectF:
-        return QRectF(-13, -13, NODE_WIDTH + 26, NODE_HEIGHT + 26)
+    def boundingRect(self) -> QRectF: return QRectF(-13, -13, NODE_WIDTH + 26, NODE_HEIGHT + 26)
 
     def shape(self) -> QPainterPath:
         path = QPainterPath()
@@ -227,15 +215,12 @@ class FlowNodeItem(QGraphicsObject):
     def _subtitle(self) -> str:
         if self.ref.kind is NodeKind.TASK and self.task:
             text = self._dependency_text()
-            if self.task.has_custom_availability:
-                text += " · custom availability"
-            if self.task.scheduled_start:
-                text += f" · {fmt_datetime(self.task.scheduled_start)}"
+            if self.task.has_custom_availability: text += " · custom availability"
+            if self.task.scheduled_start: text += f" · {fmt_datetime(self.task.scheduled_start)}"
             return text
         if self.ref.kind is NodeKind.PROJECT and self.project:
             text = self._dependency_text()
-            if self.project.resolution_conditions_unknown:
-                text += " · Requirements Undefined"
+            if self.project.resolution_conditions_unknown: text += " · Requirements Undefined"
             return text
         if self.condition:
             users = len(self.snapshot.attached_preconditions(self.condition.id))
@@ -243,15 +228,12 @@ class FlowNodeItem(QGraphicsObject):
         return ""
 
     def _title(self) -> str:
-        if self.ref.kind is NodeKind.TASK:
-            return self.task.name if self.task else "Deleted task"
-        if self.ref.kind is NodeKind.PROJECT:
-            return self.project.name if self.project else "Deleted project"
+        if self.ref.kind is NodeKind.TASK: return self.task.name if self.task else "Deleted task"
+        if self.ref.kind is NodeKind.PROJECT: return self.project.name if self.project else "Deleted project"
         return self.condition.display_name if self.condition else "Deleted condition"
 
     def _kind_text(self) -> str:
-        if self.ref.kind is NodeKind.CONDITION:
-            return "CONDITION · FACT"
+        if self.ref.kind is NodeKind.CONDITION: return "CONDITION · FACT"
         return self.ref.kind.value.upper()
 
     def _state_text(self) -> tuple[str, str] | None:
@@ -262,12 +244,10 @@ class FlowNodeItem(QGraphicsObject):
         return None
 
     def _condition_value(self) -> bool | None:
-        if self.ref.kind is not NodeKind.CONDITION:
-            return None
+        if self.ref.kind is not NodeKind.CONDITION: return None
         return self.evaluation.condition_value(self.ref.id)
 
-    def _toggle_rect(self) -> QRectF:
-        return QRectF(NODE_WIDTH - 78, NODE_HEIGHT - 31, 63, 21)
+    def _toggle_rect(self) -> QRectF: return QRectF(NODE_WIDTH - 78, NODE_HEIGHT - 31, 63, 21)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # type: ignore[no-untyped-def]
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -349,8 +329,7 @@ class FlowNodeItem(QGraphicsObject):
         painter.setPen(QColor(c("faint")))
         if self.ref.kind is NodeKind.TASK and self.task:
             footer = "Recurring" if self.task.is_recurring else "One-shot"
-            if self.task.scheduled_end:
-                footer += " · " + self.task.scheduled_end.strftime("%H:%M")
+            if self.task.scheduled_end: footer += " · " + self.task.scheduled_end.strftime("%H:%M")
             painter.drawText(
                 QRectF(16, NODE_HEIGHT - 27, 150, 18),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -396,8 +375,7 @@ class FlowNodeItem(QGraphicsObject):
             QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged,
             QGraphicsItem.GraphicsItemChange.ItemVisibleHasChanged,
         ):
-            if self.scene_ref is not None:
-                self.scene_ref.refresh_edges()
+            if self.scene_ref is not None: self.scene_ref.refresh_edges()
             if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
                 self.setZValue(12 if value else 10)
         return super().itemChange(change, value)
@@ -453,7 +431,7 @@ class EdgeItem(QGraphicsItem):
         self._label_rect = QRectF()
         self._color_key = "teal" if edge.kind is EdgeKind.PRECONDITION else "blue"
         self.setZValue(3 if edge.kind is EdgeKind.PRECONDITION else 2)
-        self._font = QFont("Segoe UI", 7)
+        self._font = QFont("Segoe UI", fs(7))
         self._font.setBold(True)
         self._font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.3)
         self.update_path()
@@ -464,8 +442,7 @@ class EdgeItem(QGraphicsItem):
         end = self.target.mapToScene(QPointF(0, NODE_HEIGHT / 2))
         dx = end.x() - start.x()
         bend = max(72.0, min(240.0, abs(dx) * 0.52))
-        if dx < 40:
-            bend = max(95.0, abs(dx) * 0.2 + 95)
+        if dx < 40: bend = max(95.0, abs(dx) * 0.2 + 95)
         c1 = QPointF(start.x() + bend, start.y())
         c2 = QPointF(end.x() - bend, end.y())
         path = QPainterPath(start)
@@ -500,8 +477,7 @@ class EdgeItem(QGraphicsItem):
             Qt.PenStyle.SolidLine,
             Qt.PenCapStyle.RoundCap,
         )
-        if self.edge.kind is EdgeKind.PREREQUISITE:
-            pen.setStyle(Qt.PenStyle.SolidLine)
+        if self.edge.kind is EdgeKind.PREREQUISITE: pen.setStyle(Qt.PenStyle.SolidLine)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(self._path)
@@ -540,8 +516,7 @@ class EdgeItem(QGraphicsItem):
 
     def mouseDoubleClickEvent(self, event):  # type: ignore[no-untyped-def]
         scene = self.scene()
-        if isinstance(scene, FlowScene):
-            scene.edge_delete_requested.emit(self.edge)
+        if isinstance(scene, FlowScene): scene.edge_delete_requested.emit(self.edge)
         event.accept()
 
 class FlowScene(QGraphicsScene):
@@ -556,6 +531,7 @@ class FlowScene(QGraphicsScene):
     def __init__(self, layout_store: LayoutStore, parent=None):
         super().__init__(parent)
         self.layout_store = layout_store
+        self.layout_mode: str = "source"  # "source" ("From start") or "sink" ("To finish")
         self.view_data: WorkspaceView | None = None
         self.node_items: dict[str, FlowNodeItem] = {}
         self.edge_items: list[EdgeItem] = []
@@ -568,8 +544,7 @@ class FlowScene(QGraphicsScene):
     def load_view(self, view: WorkspaceView) -> None:
         selected_key = None
         current = self.selectedItems()
-        if current and isinstance(current[0], FlowNodeItem):
-            selected_key = current[0].key
+        if current and isinstance(current[0], FlowNodeItem): selected_key = current[0].key
         self._loading = True
         try:
             self.clear()
@@ -583,21 +558,16 @@ class FlowScene(QGraphicsScene):
             saved = self.layout_store.positions()
             refs: list[NodeRef] = []
             for task in snapshot.tasks.values():
-                if task.current_state.is_active:
-                    refs.append(NodeRef(NodeKind.TASK, task.id))
+                if task.current_state.is_active: refs.append(NodeRef(NodeKind.TASK, task.id))
             for project in snapshot.projects.values():
-                if project.current_state.is_open:
-                    refs.append(NodeRef(NodeKind.PROJECT, project.id))
-            for condition in snapshot.conditions.values():
-                refs.append(NodeRef(NodeKind.CONDITION, condition.id))
+                if project.current_state.is_open: refs.append(NodeRef(NodeKind.PROJECT, project.id))
+            for condition in snapshot.conditions.values(): refs.append(NodeRef(NodeKind.CONDITION, condition.id))
             positions: dict[str, tuple[float, float]] = {}
             missing = [ref for ref in refs if ref.key not in saved]
-            if refs and (not saved or len(missing) == len(refs)):
-                positions = self._compute_auto_layout(view, refs)
+            if refs and (not saved or len(missing) == len(refs)): positions = self._compute_auto_layout(view, refs)
             else:
                 positions.update({ref.key: saved[ref.key] for ref in refs if ref.key in saved})
-                for ref in missing:
-                    positions[ref.key] = self._new_node_position(ref, positions)
+                for ref in missing: positions[ref.key] = self._new_node_position(ref, positions)
             for ref in refs:
                 item = FlowNodeItem(ref, view, self)
                 item.setPos(QPointF(*positions.get(ref.key, (40, 40))))
@@ -614,28 +584,20 @@ class FlowScene(QGraphicsScene):
                     self.addItem(edge_item)
                     self.edge_items.append(edge_item)
             bounds = self.itemsBoundingRect()
-            if bounds.isEmpty():
-                self.setSceneRect(-10000, -10000, 20000, 20000)
-            else:
-                self.setSceneRect(bounds.adjusted(-5000, -5000, 5000, 5000))
-            if refs and positions:
-                self.layout_store.set_positions(positions)
-            if selected_key and selected_key in self.node_items:
-                self.node_items[selected_key].setSelected(True)
-        finally:
-            self._loading = False
+            if bounds.isEmpty(): self.setSceneRect(-10000, -10000, 20000, 20000)
+            else: self.setSceneRect(bounds.adjusted(-5000, -5000, 5000, 5000))
+            if refs and positions: self.layout_store.set_positions(positions)
+            if selected_key and selected_key in self.node_items: self.node_items[selected_key].setSelected(True)
+        finally: self._loading = False
         self._on_selection_changed()
 
     def _depth(self, view: WorkspaceView, ref: NodeRef, seen: set[NodeRef] | None = None) -> int:
-        if ref.kind is NodeKind.CONDITION:
-            return 0
+        if ref.kind is NodeKind.CONDITION: return 0
         seen = set() if seen is None else seen
-        if ref in seen:
-            return 0
+        if ref in seen: return 0
         seen.add(ref)
         sources = view.snapshot.prerequisites_for(ref)
-        if not sources:
-            return 1
+        if not sources: return 1
         return 1 + max(self._depth(view, source, seen) for source in sources)
 
     def _compute_auto_layout(self, view: WorkspaceView, refs: list[NodeRef]) -> dict[str, tuple[float, float]]:
@@ -661,8 +623,7 @@ class FlowScene(QGraphicsScene):
         for edge in all_edges:
             incoming[edge.target].append(edge.source)
             outgoing[edge.source].append(edge.target)
-        for ref in chain_refs:
-            incoming[ref].sort(key=lambda r: (r.kind.value, snapshot.get_name(r).casefold()))
+        for ref in chain_refs: incoming[ref].sort(key=lambda r: (r.kind.value, snapshot.get_name(r).casefold()))
 
         # Sinks are the rightmost nodes in each connected chain (e.g., Projects)
         sinks = sorted(
@@ -670,23 +631,38 @@ class FlowScene(QGraphicsScene):
             key=lambda r: (0 if r.kind == NodeKind.PROJECT else 1, snapshot.get_name(r).casefold()),
         )
 
-        # Forward depth from roots (0 = Task/Condition on left, 1+ = Project on right)
-        fwd_depth: dict[NodeRef, int] = {}
+        # Column assignment: "source" ("From start") vs. "sink" ("To finish")
+        if self.layout_mode == "sink":
+            rev_depth: dict[NodeRef, int] = {}
 
-        def _calc_fwd_depth(node: NodeRef, visiting: set[NodeRef]) -> int:
-            if node in fwd_depth:
-                return fwd_depth[node]
-            if node in visiting:
-                return 0
-            visiting.add(node)
-            preds = incoming.get(node, [])
-            d = 0 if not preds else 1 + max(_calc_fwd_depth(p, visiting) for p in preds)
-            visiting.remove(node)
-            fwd_depth[node] = d
-            return d
+            def _calc_rev_depth(node: NodeRef, visiting: set[NodeRef]) -> int:
+                if node in rev_depth: return rev_depth[node]
+                if node in visiting: return 0
+                visiting.add(node)
+                succs = outgoing.get(node, [])
+                d = 0 if not succs else 1 + max(_calc_rev_depth(s, visiting) for s in succs)
+                visiting.remove(node)
+                rev_depth[node] = d
+                return d
 
-        for ref in chain_refs:
-            _calc_fwd_depth(ref, set())
+            for ref in chain_refs: _calc_rev_depth(ref, set())
+            max_depth = max(rev_depth.values(), default=0)
+            node_col = {ref: max_depth - rev_depth.get(ref, 0) for ref in chain_refs}
+        else:
+            fwd_depth: dict[NodeRef, int] = {}
+
+            def _calc_fwd_depth(node: NodeRef, visiting: set[NodeRef]) -> int:
+                if node in fwd_depth: return fwd_depth[node]
+                if node in visiting: return 0
+                visiting.add(node)
+                preds = incoming.get(node, [])
+                d = 0 if not preds else 1 + max(_calc_fwd_depth(p, visiting) for p in preds)
+                visiting.remove(node)
+                fwd_depth[node] = d
+                return d
+
+            for ref in chain_refs: _calc_fwd_depth(ref, set())
+            node_col = dict(fwd_depth)
 
         left_margin = 40.0
         top_margin = 40.0
@@ -700,7 +676,7 @@ class FlowScene(QGraphicsScene):
         def _place_subtree(node: NodeRef) -> float:
             nonlocal cursor_y
             placed.add(node)
-            col = fwd_depth.get(node, 0)
+            col = node_col.get(node, 0)
             x = left_margin + col * step_x
             unplaced_preds = [p for p in incoming.get(node, []) if p not in placed]
             if not unplaced_preds:
@@ -719,8 +695,7 @@ class FlowScene(QGraphicsScene):
                 cursor_y += NODE_GAP_Y * 0.5  # Extra breathing room between project groups
 
         for ref in sorted(chain_refs, key=lambda r: snapshot.get_name(r).casefold()):
-            if ref not in placed:
-                _place_subtree(ref)
+            if ref not in placed: _place_subtree(ref)
 
         max_chain_x = max((pos[0] for pos in positions.values()), default=left_margin - step_x)
 
@@ -746,18 +721,15 @@ class FlowScene(QGraphicsScene):
         if kind_positions:
             base_x = min(pos[0] for _, pos in kind_positions)
             y = max(pos[1] for _, pos in kind_positions) + NODE_HEIGHT + NODE_GAP_Y
-        else:
-            y = 40.0
+        else: y = 40.0
         return base_x, y
 
     def auto_layout(self) -> None:
-        if not self.view_data:
-            return
+        if not self.view_data: return
         positions = self._compute_auto_layout(self.view_data, [item.ref for item in self.node_items.values()])
         for key, (x, y) in positions.items():
             item = self.node_items.get(key)
-            if item:
-                item.setPos(QPointF(x, y))
+            if item: item.setPos(QPointF(x, y))
         self.layout_store.set_positions(positions)
         self.layout_store.save()
         self.refresh_edges()
@@ -772,30 +744,23 @@ class FlowScene(QGraphicsScene):
         self.layout_changed.emit()
 
     def refresh_edges(self) -> None:
-        for edge in self.edge_items:
-            edge.update_path()
+        for edge in self.edge_items: edge.update_path()
 
     def _on_selection_changed(self) -> None:
-        if self._loading:
-            return
+        if self._loading: return
         items = self.selectedItems()
         if not items:
             self.selection_changed.emit(None)
             return
         item = items[0]
-        if isinstance(item, FlowNodeItem):
-            self.selection_changed.emit(item.ref)
-        elif isinstance(item, EdgeItem):
-            self.selection_changed.emit(item.edge)
-        else:
-            self.selection_changed.emit(None)
+        if isinstance(item, FlowNodeItem): self.selection_changed.emit(item.ref)
+        elif isinstance(item, EdgeItem): self.selection_changed.emit(item.edge)
+        else: self.selection_changed.emit(None)
 
     def select_ref(self, ref: NodeRef | None) -> None:
-        if self._loading:
-            return
+        if self._loading: return
         self.clearSelection()
-        if ref and ref.key in self.node_items:
-            self.node_items[ref.key].setSelected(True)
+        if ref and ref.key in self.node_items: self.node_items[ref.key].setSelected(True)
 
     def start_connection(self, node: FlowNodeItem) -> None:
         self.cancel_connection()
@@ -811,8 +776,7 @@ class FlowScene(QGraphicsScene):
         )
 
     def update_connection(self, scene_pos: QPointF) -> None:
-        if not self._preview or not self._connection_source:
-            return
+        if not self._preview or not self._connection_source: return
         start = self._connection_source.mapToScene(QPointF(NODE_WIDTH, NODE_HEIGHT / 2))
         dx = scene_pos.x() - start.x()
         bend = max(55.0, min(240.0, abs(dx) * 0.5))
@@ -821,20 +785,16 @@ class FlowScene(QGraphicsScene):
         self._preview.setPath(path)
         target = self._node_at(scene_pos)
         if target is not self._hover_target:
-            if self._hover_target:
-                self._hover_target.set_connection_hover(False)
+            if self._hover_target: self._hover_target.set_connection_hover(False)
             self._hover_target = target if target is not self._connection_source else None
-            if self._hover_target:
-                self._hover_target.set_connection_hover(True)
+            if self._hover_target: self._hover_target.set_connection_hover(True)
 
     def finish_connection(self, scene_pos: QPointF) -> None:
         target = self._node_at(scene_pos)
         source = self._connection_source
         self.cancel_connection()
-        if source and target and target is not source:
-            self.connect_requested.emit(source.ref, target.ref)
-        elif source and target is source:
-            self.status_message.emit("A node cannot depend on itself.", "error")
+        if source and target and target is not source: self.connect_requested.emit(source.ref, target.ref)
+        elif source and target is source: self.status_message.emit("A node cannot depend on itself.", "error")
         elif source and target is None:
             self.status_message.emit("Release the connection on another node.", "info")
 
@@ -851,8 +811,7 @@ class FlowScene(QGraphicsScene):
         for item in self.items(point):
             cursor: QGraphicsItem | None = item
             while cursor is not None:
-                if isinstance(cursor, FlowNodeItem):
-                    return cursor
+                if isinstance(cursor, FlowNodeItem): return cursor
                 cursor = cursor.parentItem()
         return None
 
@@ -865,12 +824,10 @@ class FlowScene(QGraphicsScene):
 
     def selected_edge(self) -> Edge | None:
         for item in self.selectedItems():
-            if isinstance(item, EdgeItem):
-                return item.edge
+            if isinstance(item, EdgeItem): return item.edge
         return None
 
-    def has_content(self) -> bool:
-        return bool(self.node_items)
+    def has_content(self) -> bool: return bool(self.node_items)
 
 class FlowView(QGraphicsView):
     status_message = pyqtSignal(str, str)
@@ -926,12 +883,10 @@ class FlowView(QGraphicsView):
             x += grid * 5
 
     def wheelEvent(self, event):  # type: ignore[no-untyped-def]
-        if event.angleDelta().y() == 0:
-            return
+        if event.angleDelta().y() == 0: return
         factor = 1.13 if event.angleDelta().y() > 0 else 1 / 1.13
         new_zoom = self._zoom * factor
-        if not 0.32 <= new_zoom <= 2.2:
-            return
+        if not 0.32 <= new_zoom <= 2.2: return
         self._zoom = new_zoom
         self.scale(factor, factor)
         event.accept()
@@ -1008,6 +963,34 @@ class FlowView(QGraphicsView):
         if self._zoom > 1.0:
             self.resetTransform()
             self._zoom = 1.0
+
+    # -------------------------------------------------------------- view state
+    def capture_view_state(self) -> dict:
+        """Snapshot the zoom level and the scene point at the viewport centre."""
+        centre = self.mapToScene(self.viewport().rect().center())
+        return {
+            "zoom": float(self._zoom),
+            "center_x": float(centre.x()),
+            "center_y": float(centre.y()),
+        }
+
+    def restore_view_state(self, state: dict | None) -> bool:
+        """Restore a snapshot taken by :meth:`capture_view_state`."""
+        if not state: return False
+        try: zoom = float(state.get("zoom", 1.0))
+        except (TypeError, ValueError): zoom = 1.0
+        zoom = max(0.32, min(2.2, zoom))
+        try:
+            centre = QPointF(
+                float(state.get("center_x", 0.0)),
+                float(state.get("center_y", 0.0)),
+            )
+        except (TypeError, ValueError): centre = QPointF(0.0, 0.0)
+        self.resetTransform()
+        if abs(zoom - 1.0) > 1e-6: self.scale(zoom, zoom)
+        self._zoom = zoom
+        self.centerOn(centre)
+        return True
 
     def reset_view(self) -> None:
         self.resetTransform()

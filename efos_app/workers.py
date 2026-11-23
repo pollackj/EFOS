@@ -4,12 +4,9 @@ Database access inside workers goes through the thread-safe connection pool;
 Qt widgets are never touched off the GUI thread.
 """
 from __future__ import annotations
-
 from PyQt6.QtCore import QThread, pyqtSignal
-
 from .rag_service import ChatAnswer, RagPipeline
 from .service import EFOSService, WorkspaceView
-
 
 class ConnectionProbeWorker(QThread):
     result_ready = pyqtSignal(object)
@@ -19,8 +16,7 @@ class ConnectionProbeWorker(QThread):
         self.service = service
 
     def run(self) -> None:
-        try:
-            status = self.service.connection_status()
+        try: status = self.service.connection_status()
         except Exception as exc:  # pragma: no cover - defensive
             from .models import ConnectionStatus
 
@@ -51,12 +47,9 @@ class ChatWorker(QThread):
 
     def run(self) -> None:
         try:
-            answer: ChatAnswer = self.pipeline.ask(
-                self.question, view=self.view, history=self.history
-            )
+            answer: ChatAnswer = self.pipeline.ask(self.question, view=self.view, history=self.history)
             self.answer_ready.emit(answer)
-        except Exception as exc:
-            self.failed.emit(str(exc))
+        except Exception as exc: self.failed.emit(str(exc))
 
 
 class CalendarSyncWorker(QThread):
@@ -72,8 +65,7 @@ class CalendarSyncWorker(QThread):
         try:
             state = self.service.sync_calendar(force_full=self.force_full)
             self.state_ready.emit(state)
-        except Exception as exc:
-            self.failed.emit(_failure_text(exc, "syncing Google Calendar"))
+        except Exception as exc: self.failed.emit(_failure_text(exc, "syncing Google Calendar"))
 
 
 class CalendarConnectWorker(QThread):
@@ -98,13 +90,10 @@ class CalendarConnectWorker(QThread):
                 return
             state = self.service.connect_calendar()
             self.state_ready.emit(state)
-        except Exception as exc:
-            self.failed.emit(_failure_text(exc, "authorizing Google Calendar"))
-
+        except Exception as exc: self.failed.emit(_failure_text(exc, "authorizing Google Calendar"))
 
 def _failure_text(exc: BaseException, action: str) -> str:
     """Readable failure text even for exceptions with an empty ``str()``."""
     message = str(exc).strip()
-    if message:
-        return message
+    if message: return message
     return f"{type(exc).__name__} while {action}."

@@ -32,7 +32,7 @@ from ..models import CalendarItem, SyncState
 from ..service import EFOSService, WorkspaceView
 from ..workers import CalendarConnectWorker, CalendarSyncWorker
 from .icons import icon
-from .theme import c, rgba, state_color
+from .theme import c, fs, rgba, state_color
 from .widgets import Badge, Divider, SegmentedControl
 
 HOUR_HEIGHT = 54
@@ -114,7 +114,7 @@ class DayCanvas(_ItemCanvas):
         self._hits = []
         width = self.width()
         painter.fillRect(self.rect(), QColor(c("surface")))
-        painter.setFont(QFont("Segoe UI", 8))
+        painter.setFont(QFont("Segoe UI", fs(8)))
         for hour in range(24):
             y = GRID_PAD + hour * HOUR_HEIGHT
             painter.setPen(QPen(QColor(c("border")), 1))
@@ -152,7 +152,7 @@ class DayCanvas(_ItemCanvas):
         painter.drawRoundedRect(rect, 6, 6)
         painter.setPen(QPen(QColor(item_tone(item)), 3))
         painter.drawLine(QPointF(rect.left() + 1, rect.top() + 4), QPointF(rect.left() + 1, rect.bottom() - 4))
-        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        painter.setFont(QFont("Segoe UI", fs(8), QFont.Weight.DemiBold))
         painter.setPen(QColor(c("text")))
         painter.drawText(
             rect.adjusted(7, 3, -4, -2),
@@ -160,7 +160,7 @@ class DayCanvas(_ItemCanvas):
             _elide(painter, item.title, rect.width() - 12),
         )
         if rect.height() > 32:
-            painter.setFont(QFont("Segoe UI", 7))
+            painter.setFont(QFont("Segoe UI", fs(7)))
             painter.setPen(QColor(c("muted")))
             painter.drawText(
                 rect.adjusted(7, 16, -4, -2),
@@ -224,7 +224,7 @@ class DayView(QWidget):
         ]
         if not around:
             empty = QLabel("No all-day events")
-            empty.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
+            empty.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px;")
             self.allday_layout.addWidget(empty)
         for item in around:
             chip = QLabel(item.title)
@@ -232,7 +232,7 @@ class DayView(QWidget):
             chip.setStyleSheet(
                 f"background: {rgba(item_tone(item), 0.18)}; color: {c('text')}; "
                 f"border: 1px solid {rgba(item_tone(item), 0.45)}; border-radius: 6px; "
-                "padding: 2px 8px; font-size: 10px;"
+                f"padding: 2px 8px; font-size: {fs(10)}px;"
             )
             self.allday_layout.addWidget(chip)
         self.allday_layout.addStretch(1)
@@ -304,7 +304,7 @@ class WeekAllDayCanvas(_ItemCanvas):
             painter.setPen(QPen(QColor(item_tone(item)), 1))
             painter.setBrush(item_fill(item))
             painter.drawRoundedRect(rect, 5, 5)
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+            painter.setFont(QFont("Segoe UI", fs(8), QFont.Weight.DemiBold))
             painter.setPen(QColor(c("text")))
             painter.drawText(
                 rect.adjusted(6, 1, -4, -1),
@@ -338,7 +338,7 @@ class WeekCanvas(_ItemCanvas):
         painter.fillRect(self.rect(), QColor(c("surface")))
         column_width = (width - GUTTER) / 7
         grid_bottom = GRID_PAD + 24 * HOUR_HEIGHT
-        painter.setFont(QFont("Segoe UI", 8))
+        painter.setFont(QFont("Segoe UI", fs(8)))
         for hour in range(24):
             y = GRID_PAD + hour * HOUR_HEIGHT
             painter.setPen(QPen(QColor(c("border")), 1))
@@ -389,7 +389,7 @@ class WeekCanvas(_ItemCanvas):
                 painter.setPen(QPen(QColor(item_tone(item)), 1))
                 painter.setBrush(item_fill(item))
                 painter.drawRoundedRect(rect, 5, 5)
-                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.DemiBold))
+                painter.setFont(QFont("Segoe UI", fs(7), QFont.Weight.DemiBold))
                 painter.setPen(QColor(c("text")))
                 painter.drawText(
                     rect.adjusted(4, 2, -3, -2),
@@ -432,7 +432,7 @@ class WeekView(QWidget):
             label.setFixedHeight(40)
             today = day.date() == datetime.now().date()
             label.setStyleSheet(
-                f"color: {c('accent') if today else c('muted')}; font-size: 10px; "
+                f"color: {c('accent') if today else c('muted')}; font-size: {fs(10)}px; "
                 f"font-weight: {'700' if today else '500'};"
             )
             self.header_layout.addWidget(label, 1)
@@ -473,7 +473,7 @@ class MonthCell(QFrame):
         header.setContentsMargins(0, 0, 0, 0)
         number = QLabel(str(day.day))
         number.setStyleSheet(
-            f"color: {c('text') if in_month else c('faint')}; font-size: 11px; "
+            f"color: {c('text') if in_month else c('faint')}; font-size: {fs(11)}px; "
             f"font-weight: {'700' if is_today else '600'};"
             + (
                 f"background: {c('accent')}; color: white; border-radius: 8px; padding: 0 4px;"
@@ -494,7 +494,7 @@ class MonthCell(QFrame):
                 f"{item.title}\n{fmt_datetime(item.start)} → {fmt_datetime(item.end)}"
             )
             row.setStyleSheet(
-                f"color: {c('text_soft') if external else c('text')}; font-size: 9px; "
+                f"color: {c('text_soft') if external else c('text')}; font-size: {fs(9)}px; "
                 f"background: {rgba(item_tone(item), 0.12)}; border-radius: 4px; "
                 f"border-left: 2px solid {item_tone(item)}; padding: 1px 3px;"
             )
@@ -510,7 +510,7 @@ class MonthCell(QFrame):
         hidden = len(items) - len(visible)
         if hidden > 0:
             more = QLabel(f"+{hidden} more")
-            more.setStyleSheet(f"color: {c('accent')}; font-size: 8px; font-weight: 700;")
+            more.setStyleSheet(f"color: {c('accent')}; font-size: {fs(8)}px; font-weight: 700;")
             self.layout_box.addWidget(more)
         self.layout_box.addStretch(1)
 
@@ -595,7 +595,7 @@ class ScheduleView(QWidget):
         for day in sorted(groups):
             header = QLabel(day.strftime("%A, %B %d, %Y"))
             header.setStyleSheet(
-                f"color: {c('text')}; font-size: 12px; font-weight: 700; "
+                f"color: {c('text')}; font-size: {fs(12)}px; font-weight: 700; "
                 "padding: 10px 2px 2px 2px;"
             )
             self.content.addWidget(header)
@@ -616,7 +616,7 @@ class ScheduleView(QWidget):
                     else f"{item.start.strftime('%H:%M')} – {item.end.strftime('%H:%M')}"
                 )
                 when.setFixedWidth(96)
-                when.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+                when.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
                 row_layout.addWidget(when)
                 bar = QFrame()
                 bar.setFixedSize(3, 26)
@@ -626,7 +626,7 @@ class ScheduleView(QWidget):
                 text.setSpacing(0)
                 title = QLabel(item.title)
                 title.setStyleSheet(
-                    f"color: {c('text')}; font-size: 11px; font-weight: 600;"
+                    f"color: {c('text')}; font-size: {fs(11)}px; font-weight: 600;"
                 )
                 text.addWidget(title)
                 detail = QLabel(
@@ -634,7 +634,7 @@ class ScheduleView(QWidget):
                     if item.kind == "external"
                     else f"EFOS task · {item.state}"
                 )
-                detail.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+                detail.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
                 text.addWidget(detail)
                 row_layout.addLayout(text, 1)
                 row_layout.addWidget(
@@ -692,7 +692,7 @@ class CalendarPage(QWidget):
         toolbar.addWidget(self.next_button)
         self.range_label = QLabel("")
         self.range_label.setStyleSheet(
-            f"color: {c('text')}; font-size: 15px; font-weight: 650; padding: 0 8px;"
+            f"color: {c('text')}; font-size: {fs(15)}px; font-weight: 650; padding: 0 8px;"
         )
         toolbar.addWidget(self.range_label)
         toolbar.addStretch(1)
@@ -715,7 +715,7 @@ class CalendarPage(QWidget):
         self.warning.setStyleSheet(
             f"color: {c('amber')}; background: {rgba('amber', 0.08)}; "
             f"border: 1px solid {rgba('amber', 0.24)}; border-radius: 8px; "
-            "padding: 6px 10px; font-size: 10px;"
+            f"padding: 6px 10px; font-size: {fs(10)}px;"
         )
         self.warning.hide()
         root.addWidget(self.warning)
@@ -850,7 +850,7 @@ class CalendarPage(QWidget):
         self.warning.setStyleSheet(
             f"color: {foreground}; background: {background}; "
             f"border: 1px solid {border}; border-radius: 8px; "
-            "padding: 6px 10px; font-size: 10px;"
+            f"padding: 6px 10px; font-size: {fs(10)}px;"
         )
         self.warning.show()
 

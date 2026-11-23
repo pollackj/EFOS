@@ -1,8 +1,6 @@
 """Sortable registry, object-type filters, and autocomplete search."""
 from __future__ import annotations
-
 from datetime import datetime
-
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
@@ -25,38 +23,41 @@ from PyQt6.QtWidgets import (
 from ..errors import EFOSError
 from ..formatting import fmt_relative, recurrence_span, schedule_span, truncate
 from ..logic import availability_summary, condition_truth_label
-from ..models import (
-    NodeKind,
-    NodeRef,
-    ProjectState,
-    TaskState,
-)
+from ..models import (NodeKind, NodeRef, ProjectState, TaskState)
 from ..service import EFOSService, WorkspaceView
 from .dialogs import confirm_dialog
 from .icons import icon
 from .inspector import InspectorPanel
-from .theme import c, rgba
-from .widgets import (
-    EmptyState,
-    InspectorSplitter,
-    SegmentedControl,
-    page_margins,
-    toolbar_row,
-)
-
+from .theme import c, fs, rgba
+from .widgets import (EmptyState, InspectorSplitter, SegmentedControl, page_margins, toolbar_row)
 
 TASK_HEADERS = ["TASK", "STATUS", "CONDITIONS", "RECURRING", "CREATED"]
 PROJECT_HEADERS = ["PROJECT", "STATE", "CONDITIONS", "CREATED"]
 CONDITION_HEADERS = ["CONDITION", "VALUE", "CREATED"]
 ALL_HEADERS = ["OBJECT", "TYPE", "STATE", "CONDITIONS", "CREATED"]
-
 TASK_KEYS = ["name", "state", "conditions", "recurring", "created"]
 PROJECT_KEYS = ["name", "state", "conditions", "created"]
 CONDITION_KEYS = ["name", "value", "created"]
 ALL_KEYS = ["name", "kind", "state", "conditions", "created"]
-
 VALUE_ORDER = {False: 0, None: 1, True: 2}
 
+# Operational priority for the STATUS column. Task Status sorts Blocked first
+# (needs intervention), then Ready (actionable), Completed (history), and
+# Deferred (parked). Name is the deterministic tie-breaker inside each status.
+STATE_ORDER = {
+    "blocked": 0,
+    "ready": 1,
+    "active": 1,
+    "completed": 2,
+    "deferred": 3,
+    "stalled": 4,
+    "shelved": 5,
+    "resolved": 6,
+    "false": 0,
+    "unknown": 1,
+    "true": 2,
+}
+TASK_STATUS_PRIORITY = ("blocked", "ready", "completed", "deferred")
 
 class RegistryPage(QWidget):
     create_requested = pyqtSignal(object)
@@ -64,13 +65,17 @@ class RegistryPage(QWidget):
     mutated = pyqtSignal(str)
     toast_requested = pyqtSignal(str, str)
 
+    @staticmethod
+    def _default_sort(kind: NodeKind | None) -> tuple[str, bool]:
+        """Tasks open on the operational Status priority; other views by name."""
+        return ("state", True) if kind is NodeKind.TASK else ("name", True)
+
     def __init__(self, service: EFOSService, parent: QWidget | None = None):
         super().__init__(parent)
         self.service = service
         self.view: WorkspaceView | None = None
         self.kind: NodeKind | None = NodeKind.TASK
-        self.sort_key = "name"
-        self.sort_ascending = True
+        self.sort_key, self.sort_ascending = self._default_sort(self.kind)
         self.rows: list[dict] = []
         self._suggestion_refs: dict[str, NodeRef] = {}
         self._selected_ref: NodeRef | None = None
@@ -99,9 +104,7 @@ class RegistryPage(QWidget):
         self.new_button = QPushButton("New task")
         self.new_button.setProperty("variant", "primary")
         self.new_button.setIcon(icon("plus", "#FFFFFF", 14))
-        self.new_button.clicked.connect(
-            lambda: self.create_requested.emit(self.kind or NodeKind.TASK)
-        )
+        self.new_button.clicked.connect(lambda: self.create_requested.emit(self.kind or NodeKind.TASK))
         top.addWidget(self.new_button)
         root.addWidget(self.toolbar)
 
@@ -141,25 +144,23 @@ class RegistryPage(QWidget):
         self.empty_button = QPushButton("Create task")
         
         # 1. Theme-aware colors, adaptive text contrast, and active mouse :hover transitions
-        self.empty_button.setStyleSheet("""
-            QPushButton {
+        self.empty_button.setStyleSheet(f"""
+            QPushButton {{
                 background-color: #2D3748;
                 color: #FFFFFF;
                 border: 1px solid #4A5568;  /* Force a solid, visible gray border */
                 border-radius: 6px;
                 padding: 8px 18px;
                 font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
+                font-size: {fs(12)}px;
+            }}
+            QPushButton:hover {{
                 background-color: #4A5568;
                 border: 1px solid #718096; /* Highlight border slightly on hover */
-            }
+            }}
         """)
         
-        self.empty_button.clicked.connect(
-            lambda: self.create_requested.emit(self.kind or NodeKind.TASK)
-        )
+        self.empty_button.clicked.connect(lambda: self.create_requested.emit(self.kind or NodeKind.TASK))
         self.empty_state = EmptyState(
             "No matching records",
             "Create a record or adjust the search and object-type filter.",
@@ -214,7 +215,7 @@ class RegistryPage(QWidget):
         popup.setStyleSheet(
             f"QListView {{ background: {c('surface')}; color: {c('text')}; "
             f"border: 1px solid {c('border_hi')}; border-radius: 9px; padding: 4px; "
-            f"font-size: 12px; }}"
+            f"font-size: {fs(12)}px; }}"
             f"QListView::item {{ padding: 7px 10px; border-radius: 6px; }}"
             f"QListView::item:selected {{ background: {c('selection')}; color: {c('text')}; }}"
         )
@@ -225,23 +226,18 @@ class RegistryPage(QWidget):
         self._refresh_completer()
         self._populate()
         if self._selected_ref is not None:
-            if view.snapshot.exists(self._selected_ref):
-                self.inspector.set_view(view)
+            if view.snapshot.exists(self._selected_ref): self.inspector.set_view(view)
             else:
                 self._selected_ref = None
                 self.inspector.set_ref(None, view)
-        else:
-            self.inspector.set_ref(None, view)
+        else: self.inspector.set_ref(None, view)
 
-    def flush_notes(self) -> bool:
-        return self.inspector.commit_note()
+    def flush_notes(self) -> bool: return self.inspector.commit_note()
 
     def _change_filter(self, index: int) -> None:
-        if not self.inspector.commit_note():
-            return
+        if not self.inspector.commit_note(): return
         self.kind = [None, NodeKind.TASK, NodeKind.PROJECT, NodeKind.CONDITION][index]
-        self.sort_key = "name"
-        self.sort_ascending = True
+        self.sort_key, self.sort_ascending = self._default_sort(self.kind)
         self._selected_ref = None
         self.inspector.set_ref(None, self.view)
         label = (self.kind.label.lower() if self.kind else "record")
@@ -252,12 +248,9 @@ class RegistryPage(QWidget):
         self._populate()
 
     def _headers(self) -> tuple[list[str], list[str]]:
-        if self.kind is NodeKind.TASK:
-            return TASK_HEADERS, TASK_KEYS
-        if self.kind is NodeKind.PROJECT:
-            return PROJECT_HEADERS, PROJECT_KEYS
-        if self.kind is NodeKind.CONDITION:
-            return CONDITION_HEADERS, CONDITION_KEYS
+        if self.kind is NodeKind.TASK: return TASK_HEADERS, TASK_KEYS
+        if self.kind is NodeKind.PROJECT: return PROJECT_HEADERS, PROJECT_KEYS
+        if self.kind is NodeKind.CONDITION: return CONDITION_HEADERS, CONDITION_KEYS
         return ALL_HEADERS, ALL_KEYS
 
     def _update_headers(self) -> None:
@@ -265,23 +258,19 @@ class RegistryPage(QWidget):
         labels = []
         for header, key in zip(headers, keys):
             arrow = ""
-            if key == self.sort_key:
-                arrow = " ▲" if self.sort_ascending else " ▼"
+            if key == self.sort_key: arrow = " ▲" if self.sort_ascending else " ▼"
             labels.append(header + arrow)
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(labels)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, len(headers)):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        for column in range(1, len(headers)): header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
 
     def _sort_by_column(self, column: int) -> None:
         _, keys = self._headers()
-        if not 0 <= column < len(keys):
-            return
+        if not 0 <= column < len(keys): return
         key = keys[column]
-        if key == self.sort_key:
-            self.sort_ascending = not self.sort_ascending
+        if key == self.sort_key: self.sort_ascending = not self.sort_ascending
         else:
             self.sort_key = key
             self.sort_ascending = True
@@ -289,8 +278,7 @@ class RegistryPage(QWidget):
         self._populate()
 
     # ----------------------------------------------------------------- search
-    def _search_edited(self, _text: str) -> None:
-        self._refresh_completer()
+    def _search_edited(self, _text: str) -> None: self._refresh_completer()
 
     def _refresh_completer(self) -> None:
         if self.view is None:
@@ -317,12 +305,9 @@ class RegistryPage(QWidget):
                     NodeRef(kind, condition.id)
                     for condition in snapshot.conditions.values()
                 ]
-            for ref in sorted(
-                refs, key=lambda item: snapshot.get_name(item).casefold()
-            ):
+            for ref in sorted(refs, key=lambda item: snapshot.get_name(item).casefold()):
                 label = f"{kind.label} · {snapshot.get_name(ref)}"
-                if self.kind is None:
-                    label += f"  ({snapshot.get_state(ref)})"
+                if self.kind is None: label += f"  ({snapshot.get_state(ref)})"
                 entries.append(label)
                 self._suggestion_refs[label] = ref
         model = self.completer.model()
@@ -335,16 +320,9 @@ class RegistryPage(QWidget):
 
     def _suggestion_activated(self, text: str) -> None:
         ref = self._suggestion_refs.get(text)
-        if ref is None:
-            return
-        if not self.inspector.commit_note():
-            return
-        target_index = {
-            None: 0,
-            NodeKind.TASK: 1,
-            NodeKind.PROJECT: 2,
-            NodeKind.CONDITION: 3,
-        }[ref.kind]
+        if ref is None: return
+        if not self.inspector.commit_note(): return
+        target_index = {None: 0, NodeKind.TASK: 1, NodeKind.PROJECT: 2, NodeKind.CONDITION: 3}[ref.kind]
         self.kind = ref.kind
         self.segments.select(target_index, emit=False)
         label = self.kind.label.lower()
@@ -364,8 +342,7 @@ class RegistryPage(QWidget):
 
     # ---------------------------------------------------------------- populate
     def _rows(self) -> list[dict]:
-        if self.view is None:
-            return []
+        if self.view is None: return []
         snapshot = self.view.snapshot
         evaluation = self.view.evaluation
         rows: list[dict] = []
@@ -396,9 +373,7 @@ class RegistryPage(QWidget):
                     "kind": "project",
                     "name": project.name,
                     "state": project.current_state.value,
-                    "conditions": snapshot.dependency_count(
-                        NodeRef(NodeKind.PROJECT, project.id)
-                    ),
+                    "conditions": snapshot.dependency_count(NodeRef(NodeKind.PROJECT, project.id)),
                     "recurring": False,
                     "created": project.created_at,
                     "value": None,
@@ -430,12 +405,10 @@ class RegistryPage(QWidget):
         return rows
 
     def _populate(self) -> None:
-        if self.view is None:
-            return
+        if self.view is None: return
         query = self.search.text().strip().casefold()
         rows = self._rows()
-        if self.kind is not None:
-            rows = [row for row in rows if row["kind"] == self.kind.value]
+        if self.kind is not None: rows = [row for row in rows if row["kind"] == self.kind.value]
         if query:
             rows = [
                 row
@@ -457,20 +430,12 @@ class RegistryPage(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, row["ref"].key)
                 item.setToolTip(row["tooltip"])
                 if column == 0:
-                    item.setIcon(
-                        icon(row["kind"], c(row["kind"]), 15)
-                    )
+                    item.setIcon(icon(row["kind"], c(row["kind"]), 15))
                     font = item.font()
                     font.setWeight(QFont.Weight.DemiBold)
                     item.setFont(font)
-                if align == "right":
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    )
-                else:
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                    )
+                if align == "right": item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                else: item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(index, column, item)
         self.table.blockSignals(False)
         has_rows = bool(rows)
@@ -479,16 +444,14 @@ class RegistryPage(QWidget):
             [row for row in self._rows() if row["kind"] == self.kind.value]
         )
         filtered_note = f" · {len(rows)} matching" if query or self.kind is None else ""
-        self.count_label.setText(
-            f"{len(rows)} of {total} record{'s' if total != 1 else ''}{filtered_note}"
-        )
-        self.sort_label.setText(
-            f"Sorted by {self.sort_key} · {'ascending' if self.sort_ascending else 'descending'}"
-        )
-        if self._selected_ref is not None:
-            self._select_ref(self._selected_ref)
-        else:
-            self.table.clearSelection()
+        self.count_label.setText(f"{len(rows)} of {total} record{'s' if total != 1 else ''}{filtered_note}")
+        direction = "ascending" if self.sort_ascending else "descending"
+        if self.sort_key == "state" and self.kind is NodeKind.TASK:
+            priority = " → ".join(name.title() for name in TASK_STATUS_PRIORITY)
+            self.sort_label.setText(f"{priority} · {direction}")
+        else: self.sort_label.setText(f"Sorted by {self.sort_key} · {direction}")
+        if self._selected_ref is not None: self._select_ref(self._selected_ref)
+        else: self.table.clearSelection()
         self.flow_button.setEnabled(self._selected_ref is not None)
 
     def _cells(self, row: dict, keys: list[str]) -> list[tuple[str, str, str]]:
@@ -507,10 +470,8 @@ class RegistryPage(QWidget):
         }
         cells: list[tuple[str, str, str]] = []
         for key in keys:
-            if key == "name":
-                cells.append((row["name"], c("text"), "left"))
-            elif key == "kind":
-                cells.append((str(row["kind"]).title(), c("muted"), "left"))
+            if key == "name": cells.append((row["name"], c("text"), "left"))
+            elif key == "kind": cells.append((str(row["kind"]).title(), c("muted"), "left"))
 
             elif key == "state":
                 label = (
@@ -521,29 +482,32 @@ class RegistryPage(QWidget):
                 color_value = colors.get(str(row["state"]), c("text_soft"))
                 cells.append((label, color_value, "left"))
 
-            elif key == "conditions":
-                cells.append((str(row["conditions"]), c("text_soft"), "left"))
-            elif key == "recurring":
-                cells.append(("Yes" if row["recurring"] else "No", c("text_soft"), "left"))
+            elif key == "conditions": cells.append((str(row["conditions"]), c("text_soft"), "left"))
+            elif key == "recurring": cells.append(("Yes" if row["recurring"] else "No", c("text_soft"), "left"))
             elif key == "value":
                 label = condition_truth_label(row["value"])
                 cells.append((label, colors.get(str(row["state"]), c("muted")), "left"))
-            elif key == "created":
-                cells.append((fmt_relative(row["created"]), c("faint"), "right"))
-            else:
-                cells.append((str(row.get(key, "")), c("text_soft"), "left"))
+            elif key == "created": cells.append((fmt_relative(row["created"]), c("faint"), "right"))
+            else: cells.append((str(row.get(key, "")), c("text_soft"), "left"))
         return cells
 
     def _sorted(self, rows: list[dict]) -> list[dict]:
         key = self.sort_key
 
         def value(row: dict):  # type: ignore[no-untyped-def]
-            if key == "value":
-                return VALUE_ORDER.get(row["value"], 1)
-            if key == "created":
-                return row["created"]
-            if key == "conditions" or key == "recurring":
-                return row[key]
+            if key == "state":
+                state = str(row.get("state", "")).casefold()
+                if row.get("kind") == "task":
+                    rank = (
+                        TASK_STATUS_PRIORITY.index(state)
+                        if state in TASK_STATUS_PRIORITY
+                        else len(TASK_STATUS_PRIORITY)
+                    )
+                else: rank = STATE_ORDER.get(state, 99)
+                return (rank, str(row.get("name", "")).casefold())
+            if key == "value": return VALUE_ORDER.get(row["value"], 1)
+            if key == "created": return row["created"]
+            if key == "conditions" or key == "recurring": return row[key]
             return str(row.get(key, "")).casefold()
 
         present = [row for row in rows if value(row) is not None]
@@ -555,16 +519,12 @@ class RegistryPage(QWidget):
     def _selected(self) -> NodeRef | None:
         model = self.table.selectionModel()
         rows = model.selectedRows() if model else []
-        if not rows:
-            return None
+        if not rows: return None
         item = self.table.item(rows[0].row(), 0)
-        if item is None:
-            return None
+        if item is None: return None
         data = item.data(Qt.ItemDataRole.UserRole)
-        try:
-            return NodeRef.parse(data)
-        except (ValueError, TypeError):
-            return None
+        try: return NodeRef.parse(data)
+        except (ValueError, TypeError): return None
 
     def _select_ref(self, ref: NodeRef) -> None:
         for row in range(self.table.rowCount()):
@@ -579,31 +539,26 @@ class RegistryPage(QWidget):
             self.flow_button.setEnabled(False)
             return
         if ref != self._selected_ref:
-            if not self.inspector.commit_note():
-                return
+            if not self.inspector.commit_note(): return
             self._selected_ref = ref
             self.inspector.set_ref(ref, self.view)
         self.flow_button.setEnabled(True)
 
     def _open_selected_in_flow(self) -> None:
         ref = self._selected()
-        if ref is not None:
-            self.open_flow.emit(ref)
+        if ref is not None: self.open_flow.emit(ref)
 
     def _inspector_mutated(self, message: str) -> None:
         if self._selected_ref is not None and self.view is not None:
-            if not self.view.snapshot.exists(self._selected_ref):
-                self._selected_ref = None
+            if not self.view.snapshot.exists(self._selected_ref): self._selected_ref = None
         self.mutated.emit(message)
 
     def _context_menu(self, pos) -> None:  # type: ignore[no-untyped-def]
         index = self.table.indexAt(pos)
-        if not index.isValid():
-            return
+        if not index.isValid(): return
         self.table.selectRow(index.row())
         ref = self._selected()
-        if ref is None or self.view is None:
-            return
+        if ref is None or self.view is None: return
         menu = QMenu(self)
         menu.addAction("Open properties", lambda: self.inspector.set_ref(ref, self.view))
         menu.addAction("Open in flow", lambda: self.open_flow.emit(ref))
@@ -622,44 +577,34 @@ class RegistryPage(QWidget):
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _reopen(self, ref: NodeRef) -> None:
-        try:
-            self.service.reopen_task(ref.id)
+        try: self.service.reopen_task(ref.id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Task reopened · dependency evaluation re-triggered")
 
     def _unshelve(self, ref: NodeRef) -> None:
-        try:
-            self.service.unshelve_project(ref.id)
+        try: self.service.unshelve_project(ref.id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Project unshelved")
 
     def _reactivate(self, ref: NodeRef) -> None:
-        try:
-            self.service.reactivate_project(ref.id)
+        try: self.service.reactivate_project(ref.id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Project reactivated")
 
     def _delete(self, ref: NodeRef) -> None:
-        if self.view is None:
-            return
+        if self.view is None: return
         name = self.view.snapshot.get_name(ref)
-        if not confirm_dialog(
-            self, "Delete record?", f"“{name}” and all dependency links will be removed."
-        ):
-            return
+        if not confirm_dialog(self, "Delete record?", f"“{name}” and all dependency links will be removed."): return
         try:
-            if ref.kind is NodeKind.TASK:
-                self.service.delete_task(ref.id)
-            elif ref.kind is NodeKind.PROJECT:
-                self.service.delete_project(ref.id)
-            else:
-                self.service.delete_condition(ref.id)
+            if ref.kind is NodeKind.TASK: self.service.delete_task(ref.id)
+            elif ref.kind is NodeKind.PROJECT: self.service.delete_project(ref.id)
+            else: self.service.delete_condition(ref.id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return

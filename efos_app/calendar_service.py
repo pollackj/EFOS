@@ -7,7 +7,6 @@ incremental ``syncToken`` delta on boot and at runtime intervals. If a sync
 fails, the previous snapshot is retained and the UI marks it stale.
 """
 from __future__ import annotations
-
 import base64
 import hashlib
 import io
@@ -25,9 +24,7 @@ from datetime import date, datetime, time as dt_time, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
-
 import requests
-
 from .config import AppConfig, OAUTH_SECRET_TARGET
 from .credentials import CredentialVault
 from .errors import AuthenticationRequiredError, ExternalServiceError
@@ -43,16 +40,12 @@ SCOPES = ("https://www.googleapis.com/auth/calendar.readonly",)
 LOOPBACK_PORTS = (8765, 8766, 8767, 8768)
 DEFAULT_OAUTH_TIMEOUT = 90.0
 
-
 def oauth_timeout() -> float:
     """Seconds to wait for the loopback callback (``EFOS_GOOGLE_OAUTH_TIMEOUT``)."""
     raw = os.environ.get("EFOS_GOOGLE_OAUTH_TIMEOUT", "")
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return DEFAULT_OAUTH_TIMEOUT
+    try: value = float(raw)
+    except (TypeError, ValueError): return DEFAULT_OAUTH_TIMEOUT
     return max(15.0, min(600.0, value))
-
 
 @contextmanager
 def guarded_standard_streams():
@@ -66,26 +59,19 @@ def guarded_standard_streams():
     restored afterwards.
     """
     saved_stdout, saved_stderr = sys.stdout, sys.stderr
-    if sys.stdout is None:
-        sys.stdout = io.StringIO()
-    if sys.stderr is None:
-        sys.stderr = io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout, sys.stderr = saved_stdout, saved_stderr
-
+    if sys.stdout is None: sys.stdout = io.StringIO()
+    if sys.stderr is None: sys.stderr = io.StringIO()
+    try: yield
+    finally: sys.stdout, sys.stderr = saved_stdout, saved_stderr
 
 def open_authorization_url(url: str) -> bool:
     """Open ``url`` in the user's default browser, with Windows fallbacks."""
     opened = False
-    try:
-        opened = bool(webbrowser.open(url, new=1, autoraise=True))
+    try: opened = bool(webbrowser.open(url, new=1, autoraise=True))
     except Exception:  # pragma: no cover - platform/browser specific
         log.debug("webbrowser.open failed", exc_info=True)
     if not opened:
-        try:
-            opened = bool(webbrowser.open_new_tab(url))
+        try: opened = bool(webbrowser.open_new_tab(url))
         except Exception:  # pragma: no cover - platform/browser specific
             log.debug("webbrowser.open_new_tab failed", exc_info=True)
     if not opened and sys.platform == "win32":
@@ -99,10 +85,8 @@ def open_authorization_url(url: str) -> bool:
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 opened = True
-            except OSError:
-                log.warning("No browser could be launched for the Google OAuth URL.")
+            except OSError: log.warning("No browser could be launched for the Google OAuth URL.")
     return opened
-
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
     server: "_CallbackServer"
@@ -125,10 +109,8 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         return
 
-
 class _CallbackServer(HTTPServer):
     received: dict[str, str] | None = None
-
 
 class GoogleOAuthClient:
     def __init__(self, config: AppConfig, vault: CredentialVault | None = None):
@@ -136,42 +118,30 @@ class GoogleOAuthClient:
         self.vault = vault or CredentialVault()
 
     @property
-    def configured(self) -> bool:
-        return bool(self.config.google_client_id and self.config.google_client_secret)
+    def configured(self) -> bool: return bool(self.config.google_client_id and self.config.google_client_secret)
 
     def _load(self) -> dict[str, Any] | None:
         raw = self.vault.get_secret(OAUTH_SECRET_TARGET)
-        if not raw:
-            return None
+        if not raw: return None
         try:
             value = json.loads(raw)
             return value if isinstance(value, dict) else None
-        except ValueError:
-            return None
+        except ValueError: return None
 
     def _save(self, tokens: dict[str, Any]) -> None:
-        self.vault.set(
-            OAUTH_SECRET_TARGET,
-            self.config.google_client_id[:40] or "google",
-            json.dumps(tokens),
-        )
+        self.vault.set(OAUTH_SECRET_TARGET, self.config.google_client_id[:40] or "google", json.dumps(tokens))
 
     def connected(self) -> bool:
         tokens = self._load()
         return bool(tokens and (tokens.get("refresh_token") or tokens.get("access_token")))
 
-    def clear(self) -> None:
-        self.vault.delete(OAUTH_SECRET_TARGET)
+    def clear(self) -> None: self.vault.delete(OAUTH_SECRET_TARGET)
 
     def access_token(self) -> str:
         tokens = self._load()
-        if not tokens:
-            raise AuthenticationRequiredError(
-                "Google Calendar is not authorized. Connect it from the Calendar page."
-            )
+        if not tokens: raise AuthenticationRequiredError("Google Calendar is not authorized. Connect it from the Calendar page.")
         expires_at = float(tokens.get("expires_at") or 0)
-        if tokens.get("access_token") and expires_at - 60 > time.time():
-            return str(tokens["access_token"])
+        if tokens.get("access_token") and expires_at - 60 > time.time(): return str(tokens["access_token"])
         refresh_token = tokens.get("refresh_token")
         if not refresh_token:
             raise AuthenticationRequiredError(
@@ -191,27 +161,21 @@ class GoogleOAuthClient:
                 "expires_at": time.time() + float(refreshed.get("expires_in") or 3500),
             }
         )
-        if refreshed.get("refresh_token"):
-            tokens["refresh_token"] = refreshed["refresh_token"]
+        if refreshed.get("refresh_token"): tokens["refresh_token"] = refreshed["refresh_token"]
         self._save(tokens)
         return str(tokens["access_token"])
 
     def _token_request(self, payload: dict[str, str]) -> dict[str, Any]:
-        try:
-            response = requests.post(TOKEN_ENDPOINT, data=payload, timeout=20)
+        try: response = requests.post(TOKEN_ENDPOINT, data=payload, timeout=20)
         except requests.RequestException as exc:
-            raise ExternalServiceError(
-                f"Google token endpoint is unreachable ({type(exc).__name__})."
-            ) from exc
+            raise ExternalServiceError(f"Google token endpoint is unreachable ({type(exc).__name__}).") from exc
         if response.status_code != 200:
             raise AuthenticationRequiredError(
                 f"Google authorization failed (HTTP {response.status_code}). "
                 "Reconnect Google Calendar."
             )
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise ExternalServiceError("Google returned a malformed token payload.") from exc
+        try: return response.json()
+        except ValueError as exc: raise ExternalServiceError("Google returned a malformed token payload.") from exc
 
     def _authorization(self, port: int) -> tuple[str, str, str, str]:
         verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).decode().rstrip("=")
@@ -243,8 +207,7 @@ class GoogleOAuthClient:
         # timeout=...): the loopback server never writes to a missing console,
         # the authorization URL is opened explicitly with fallbacks, and the
         # hand-off has a hard deadline instead of blocking the worker forever.
-        with guarded_standard_streams():
-            return self._run_local_server_flow()
+        with guarded_standard_streams(): return self._run_local_server_flow()
 
     def _run_local_server_flow(self) -> dict[str, Any]:
         server: _CallbackServer | None = None
@@ -278,18 +241,13 @@ class GoogleOAuthClient:
                 # Short per-request timeout: the loop re-checks the deadline so
                 # a missing browser can never block for the full wait.
                 server.timeout = max(0.2, min(1.0, deadline - time.time()))
-                try:
-                    server.handle_request()
-                except OSError:
-                    break
-        finally:
-            server.server_close()
+                try: server.handle_request()
+                except OSError: break
+        finally: server.server_close()
         received = server.received or {}
         if received.get("error"):
             detail = received.get("error_description") or received["error"]
-            raise ExternalServiceError(
-                f"Google authorization was denied ({detail})."
-            )
+            raise ExternalServiceError(f"Google authorization was denied ({detail}).")
         code = received.get("code")
         if not code:
             # No callback at all (timeout) or a callback without a code: this is
@@ -324,12 +282,10 @@ class GoogleOAuthClient:
         self._save(tokens)
         return tokens
 
-
 @dataclass(slots=True)
 class SyncResult:
     state: SyncState
     imported: int = 0
-
 
 class CalendarService:
     API_ROOT = CALENDAR_API
@@ -341,8 +297,7 @@ class CalendarService:
         self.oauth = GoogleOAuthClient(config, self.vault)
 
     @property
-    def account_id(self) -> str:
-        return "google"
+    def account_id(self) -> str: return "google"
 
     # ------------------------------------------------------------- sync status
     def sync_state(self) -> SyncState:
@@ -352,10 +307,8 @@ class CalendarService:
         if not connected:
             if state.status in ("ok", "connected") or state.last_sync_at:
                 state.status = "stale"
-                if not state.message:
-                    state.message = "Google Calendar authorization expired."
-            elif state.status in ("never", "connected"):
-                state.status = "disconnected"
+                if not state.message: state.message = "Google Calendar authorization expired."
+            elif state.status in ("never", "connected"): state.status = "disconnected"
         elif state.status == "ok" and not state.last_sync_at:
             state.status = "stale"
             state.message = "No completed synchronization yet."
@@ -365,10 +318,7 @@ class CalendarService:
     def connect(self) -> SyncState:
         tokens = self.oauth.authorize_interactive()
         calendar_id = self.config.google_calendar_id
-        if not calendar_id:
-            raise ExternalServiceError(
-                "EFOS_GOOGLE_CALENDAR_ID is required to synchronize a calendar."
-            )
+        if not calendar_id: raise ExternalServiceError("EFOS_GOOGLE_CALENDAR_ID is required to synchronize a calendar.")
         email = calendar_id
         try:
             access = str(tokens.get("access_token"))
@@ -380,8 +330,7 @@ class CalendarService:
             if response.status_code == 200:
                 payload = response.json()
                 email = payload.get("id") or calendar_id
-        except requests.RequestException:
-            pass
+        except requests.RequestException: pass
         self.repo.save_calendar_account(
             self.account_id,
             email,
@@ -390,10 +339,8 @@ class CalendarService:
             status="connected",
             last_sync_at=None,
         )
-        try:
-            self.sync(force_full=True)
-        except Exception:
-            pass
+        try: self.sync(force_full=True)
+        except Exception: pass
         return self.sync_state()
 
     def disconnect(self) -> None:
@@ -410,16 +357,9 @@ class CalendarService:
 
     # ---------------------------------------------------------------- sync
     def sync(self, *, force_full: bool = False) -> SyncState:
-        if not self.config.google_calendar_id:
-            return SyncState(
-                status="disconnected",
-                message="NO_CALENDAR_ID",
-                connected=False,
-            )
-        try:
-            token = self.oauth.access_token()
-        except AuthenticationRequiredError as exc:
-            return SyncState(status="disconnected", message=str(exc), connected=False)
+        if not self.config.google_calendar_id: return SyncState(status="disconnected", message="NO_CALENDAR_ID", connected=False)
+        try: token = self.oauth.access_token()
+        except AuthenticationRequiredError as exc: return SyncState(status="disconnected", message=str(exc), connected=False)
 
         account = self.repo.calendar_account()
         sync_token = None if force_full else (account or {}).get("sync_token")
@@ -429,18 +369,11 @@ class CalendarService:
                 if full:
                     assets = self._fetch_full(token)
                     events, next_token = assets
-                    imported = self.repo.replace_calendar_events(
-                        self.account_id, self.config.google_calendar_id, events
-                    )
-                else:
-                    imported = self.repo.upsert_calendar_events(
-                        self.account_id, self.config.google_calendar_id, events
-                    )
+                    imported = self.repo.replace_calendar_events(self.account_id, self.config.google_calendar_id, events)
+                else: imported = self.repo.upsert_calendar_events(self.account_id, self.config.google_calendar_id, events)
             else:
                 events, next_token = self._fetch_full(token)
-                imported = self.repo.replace_calendar_events(
-                    self.account_id, self.config.google_calendar_id, events
-                )
+                imported = self.repo.replace_calendar_events(self.account_id, self.config.google_calendar_id, events)
         except AuthenticationRequiredError as exc:
             # Preserve the cache and mark the snapshot stale, exactly as for an
             # offline network failure.
@@ -496,33 +429,20 @@ class CalendarService:
             },
         )
 
-    def _fetch_incremental(
-        self, token: str, sync_token: str
-    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+    def _fetch_incremental(self, token: str, sync_token: str) -> tuple[list[dict[str, Any]], str | None, bool]:
         try:
-            events, next_token = self._list_events(
-                token,
-                {
-                    "syncToken": sync_token,
-                    "maxResults": "2500",
-                    "showDeleted": "true",
-                },
-            )
+            events, next_token = self._list_events(token, {"syncToken": sync_token, "maxResults": "2500", "showDeleted": "true"})
             return events, next_token, False
-        except _SyncTokenExpired:
-            return [], None, True
+        except _SyncTokenExpired: return [], None, True
 
-    def _list_events(
-        self, token: str, params: dict[str, str]
-    ) -> tuple[list[dict[str, Any]], str | None]:
+    def _list_events(self, token: str, params: dict[str, str]) -> tuple[list[dict[str, Any]], str | None]:
         events: list[dict[str, Any]] = []
         next_token: str | None = None
         page_token: str | None = None
         calendar_id = quote(self.config.google_calendar_id, safe="")
         for _ in range(20):
             query = dict(params)
-            if page_token:
-                query["pageToken"] = page_token
+            if page_token: query["pageToken"] = page_token
             try:
                 response = requests.get(
                     f"{self.API_ROOT}/calendars/{calendar_id}/events",
@@ -531,45 +451,29 @@ class CalendarService:
                     timeout=30,
                 )
             except requests.RequestException as exc:
-                raise ExternalServiceError(
-                    f"Google Calendar is unreachable ({type(exc).__name__})."
-                ) from exc
-            if response.status_code == 410:
-                raise _SyncTokenExpired()
+                raise ExternalServiceError(f"Google Calendar is unreachable ({type(exc).__name__}).") from exc
+            if response.status_code == 410: raise _SyncTokenExpired()
             if response.status_code in (401, 403):
                 raise AuthenticationRequiredError(
                     "Google Calendar rejected the stored authorization. "
                     "Reconnect Google Calendar."
                 )
-            if response.status_code != 200:
-                raise ExternalServiceError(
-                    f"Google Calendar returned HTTP {response.status_code}."
-                )
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                raise ExternalServiceError(
-                    "Google Calendar returned malformed JSON."
-                ) from exc
+            if response.status_code != 200: raise ExternalServiceError(f"Google Calendar returned HTTP {response.status_code}.")
+            try: payload = response.json()
+            except ValueError as exc: raise ExternalServiceError("Google Calendar returned malformed JSON.") from exc
             for item in payload.get("items", []):
                 parsed = parse_google_event(item)
-                if parsed:
-                    events.append(parsed)
+                if parsed: events.append(parsed)
             page_token = payload.get("nextPageToken")
             next_token = payload.get("nextSyncToken") or next_token
-            if not page_token:
-                break
+            if not page_token: break
         return events, next_token
 
-
-class _SyncTokenExpired(Exception):
-    pass
-
+class _SyncTokenExpired(Exception): pass
 
 def _rfc3339(value: datetime) -> str:
     local = value.astimezone() if value.tzinfo is None else value.astimezone()
     return local.astimezone().isoformat()
-
 
 def _to_local_naive(value: str, *, is_date: bool) -> tuple[datetime, bool]:
     """Map every incoming datetime into the local Windows system timezone.
@@ -582,33 +486,22 @@ def _to_local_naive(value: str, *, is_date: bool) -> tuple[datetime, bool]:
         return datetime.combine(parsed, dt_time.min), True
     text = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().replace(tzinfo=None)
+    if parsed.tzinfo is not None: parsed = parsed.astimezone().replace(tzinfo=None)
     return parsed.replace(microsecond=0), False
 
-
 def parse_google_event(item: dict[str, Any]) -> dict[str, Any] | None:
-    if not item.get("id"):
-        return None
+    if not item.get("id"): return None
     start_data = item.get("start") or {}
     end_data = item.get("end") or {}
     try:
-        if "dateTime" in start_data:
-            start, all_day = _to_local_naive(start_data["dateTime"], is_date=False)
-        elif "date" in start_data:
-            start, all_day = _to_local_naive(start_data["date"], is_date=True)
-        else:
-            return None
-        if "dateTime" in end_data:
-            end, _ = _to_local_naive(end_data["dateTime"], is_date=False)
-        elif "date" in end_data:
-            end, _ = _to_local_naive(end_data["date"], is_date=True)
-        else:
-            end = start + (timedelta(days=1) if all_day else timedelta(hours=1))
-    except (ValueError, TypeError):
-        return None
-    if end <= start:
-        return None
+        if "dateTime" in start_data: start, all_day = _to_local_naive(start_data["dateTime"], is_date=False)
+        elif "date" in start_data: start, all_day = _to_local_naive(start_data["date"], is_date=True)
+        else: return None
+        if "dateTime" in end_data: end, _ = _to_local_naive(end_data["dateTime"], is_date=False)
+        elif "date" in end_data: end, _ = _to_local_naive(end_data["date"], is_date=True)
+        else: end = start + (timedelta(days=1) if all_day else timedelta(hours=1))
+    except (ValueError, TypeError): return None
+    if end <= start: return None
     return {
         "id": str(item["id"]),
         "summary": item.get("summary") or "(untitled calendar event)",
@@ -620,10 +513,7 @@ def parse_google_event(item: dict[str, Any]) -> dict[str, Any] | None:
         "all_day": all_day,
     }
 
-
-def collision_items(
-    repo: Repository, start: datetime, end: datetime
-) -> list[CalendarItem]:
+def collision_items(repo: Repository, start: datetime, end: datetime) -> list[CalendarItem]:
     """Offline collision detection against the persisted snapshot."""
     items = repo.calendar_events_between(start, end)
     return items

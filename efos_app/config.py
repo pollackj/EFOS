@@ -7,16 +7,13 @@ logs. The optional low-privilege application role password lives in the Windows
 Credential Manager, never in a flat file.
 """
 from __future__ import annotations
-
 import json
 import os
 import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
-
 from dotenv import dotenv_values
-
 from .credentials import CredentialVault
 
 APP_NAME = "EFOS"
@@ -24,36 +21,28 @@ APP_DISPLAY_NAME = "Executive Function Optimization System"
 APP_VERSION = "2.1.0"
 SCHEMA_VERSION = "2.1.0"
 ORG_NAME = "EFOS"
-
 RUNTIME_PROFILE_FILE = "runtime.json"
 UI_STATE_FILE = "ui_state.json"
 RUNTIME_SECRET_TARGET = "runtime-db"
 OAUTH_SECRET_TARGET = "google-calendar-oauth"
 
-
-class ConfigurationError(RuntimeError):
-    """Raised when EFOS cannot locate a usable configuration profile."""
-
+class ConfigurationError(RuntimeError): """Raised when EFOS cannot locate a usable configuration profile."""
 
 def _dedupe(paths: Iterable[Path]) -> list[Path]:
     seen: set[str] = set()
     result: list[Path] = []
     for path in paths:
-        try:
-            key = str(path.resolve()).lower()
-        except OSError:
-            key = str(path).lower()
+        try: key = str(path.resolve()).lower()
+        except OSError: key = str(path).lower()
         if key not in seen:
             seen.add(key)
             result.append(path)
     return result
 
-
 def _search_roots() -> list[Path]:
     roots: list[Path] = []
     override = os.environ.get("EFOS_ENV_FILE", "").strip().strip('"')
-    if override:
-        roots.append(Path(override).expanduser())
+    if override: roots.append(Path(override).expanduser())
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable).resolve()
         roots.append(exe.parent / ".env")
@@ -66,31 +55,24 @@ def _search_roots() -> list[Path]:
     roots.append(cwd / ".env")
     roots.extend(parent / ".env" for parent in list(cwd.parents)[:3])
     appdata = os.environ.get("APPDATA")
-    if appdata:
-        roots.append(Path(appdata) / "EFOS" / ".env")
+    if appdata: roots.append(Path(appdata) / "EFOS" / ".env")
     roots.append(Path.home() / ".efos" / ".env")
     return _dedupe(roots)
-
 
 def resolve_env_file() -> Path | None:
     """Return the first .env profile, or None when the runtime profile is used."""
     candidates = _search_roots()
     for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+        if candidate.is_file(): return candidate
     return None
-
 
 def app_data_dir() -> Path:
     override = os.environ.get("EFOS_APP_DATA", "").strip()
-    if override:
-        candidates = [Path(override).expanduser()]
+    if override: candidates = [Path(override).expanduser()]
     else:
         candidates = []
-        if os.environ.get("APPDATA"):
-            candidates.append(Path(os.environ["APPDATA"]) / "EFOS")
-        if os.environ.get("LOCALAPPDATA"):
-            candidates.append(Path(os.environ["LOCALAPPDATA"]) / "EFOS")
+        if os.environ.get("APPDATA"): candidates.append(Path(os.environ["APPDATA"]) / "EFOS")
+        if os.environ.get("LOCALAPPDATA"): candidates.append(Path(os.environ["LOCALAPPDATA"]) / "EFOS")
         candidates.append(Path.home() / ".efos")
         candidates.append(Path.cwd() / ".efos-data")
     last_error: OSError | None = None
@@ -98,35 +80,24 @@ def app_data_dir() -> Path:
         try:
             base.mkdir(parents=True, exist_ok=True)
             return base
-        except OSError as exc:
-            last_error = exc
-    raise ConfigurationError(
-        f"No writable EFOS data directory is available ({last_error})."
-    )
-
+        except OSError as exc: last_error = exc
+    raise ConfigurationError(f"No writable EFOS data directory is available ({last_error}).")
 
 def resource_path(relative: str) -> Path:
     """Resolve a bundled resource in source and PyInstaller builds."""
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(getattr(sys, "_MEIPASS")) / relative
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"): return Path(getattr(sys, "_MEIPASS")) / relative
     return Path(__file__).resolve().parent.parent / relative
 
+def runtime_profile_path() -> Path: return app_data_dir() / RUNTIME_PROFILE_FILE
 
-def runtime_profile_path() -> Path:
-    return app_data_dir() / RUNTIME_PROFILE_FILE
-
-
-def ui_state_path() -> Path:
-    return app_data_dir() / UI_STATE_FILE
-
+def ui_state_path() -> Path: return app_data_dir() / UI_STATE_FILE
 
 def load_ui_state() -> dict:
     """Locally persisted appearance and window state (works without registry)."""
     try:
         value = json.loads(ui_state_path().read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
-    except (OSError, ValueError, ConfigurationError):
-        return {}
+    except (OSError, ValueError, ConfigurationError): return {}
 
 
 def save_ui_state(values: dict) -> None:
@@ -138,18 +109,14 @@ def save_ui_state(values: dict) -> None:
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(current, indent=2), encoding="utf-8")
         temporary.replace(path)
-    except (OSError, ConfigurationError):
-        return
-
+    except (OSError, ConfigurationError): return
 
 def load_runtime_profile() -> dict:
     path = runtime_profile_path()
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
+    except (OSError, ValueError): return {}
 
 def save_runtime_profile(values: dict) -> None:
     """Persist non-secret runtime connection fields.
@@ -168,10 +135,7 @@ def save_runtime_profile(values: dict) -> None:
     temporary.write_text(json.dumps(clean, indent=2), encoding="utf-8")
     temporary.replace(path)
 
-
-def save_runtime_password(user: str, password: str) -> None:
-    CredentialVault().set(RUNTIME_SECRET_TARGET, user, password)
-
+def save_runtime_password(user: str, password: str) -> None: CredentialVault().set(RUNTIME_SECRET_TARGET, user, password)
 
 @dataclass(frozen=True, slots=True)
 class DbProfile:
@@ -182,8 +146,7 @@ class DbProfile:
     database: str = "efos"
 
     @property
-    def display(self) -> str:
-        return f"{self.host}:{self.port}/{self.database}"
+    def display(self) -> str: return f"{self.host}:{self.port}/{self.database}"
 
     def dsn(self, *, database: str | None = None, timeout: int = 5) -> str:
         return (
@@ -192,9 +155,7 @@ class DbProfile:
             "application_name=EFOS"
         )
 
-    def maintenance_dsn(self, *, timeout: int = 5) -> str:
-        return self.dsn(database="postgres", timeout=timeout)
-
+    def maintenance_dsn(self, *, timeout: int = 5) -> str: return self.dsn(database="postgres", timeout=timeout)
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
@@ -215,40 +176,24 @@ class AppConfig:
     data_dir: Path = field(default_factory=app_data_dir)
 
     @property
-    def google_enabled(self) -> bool:
-        return bool(
-            self.google_client_id and self.google_client_secret and self.google_calendar_id
-        )
+    def google_enabled(self) -> bool: return bool(self.google_client_id and self.google_client_secret and self.google_calendar_id)
 
     @property
-    def deepseek_enabled(self) -> bool:
-        return bool(self.deepseek_api_key)
+    def deepseek_enabled(self) -> bool: return bool(self.deepseek_api_key)
 
     @property
-    def db_display(self) -> str:
-        return self.profile.display
+    def db_display(self) -> str: return self.profile.display
 
     @property
-    def profile(self) -> DbProfile:
-        return DbProfile(
-            self.db_host, self.db_port, self.db_user, self.db_password, self.db_name
-        )
+    def profile(self) -> DbProfile: return DbProfile(self.db_host, self.db_port, self.db_user, self.db_password, self.db_name)
 
     @property
     def admin_profile(self) -> DbProfile:
-        return DbProfile(
-            self.db_host,
-            self.db_port,
-            self.admin_user,
-            self.admin_password or self.db_password,
-            "postgres",
-        )
+        return DbProfile(self.db_host, self.db_port, self.admin_user, self.admin_password or self.db_password, "postgres")
 
-    def dsn(self, *, database: str | None = None) -> str:
-        return self.profile.dsn(database=database)
+    def dsn(self, *, database: str | None = None) -> str: return self.profile.dsn(database=database)
 
-    def with_database(self, database: str) -> "AppConfig":
-        return replace(self, db_name=database)
+    def with_database(self, database: str) -> "AppConfig": return replace(self, db_name=database)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -258,16 +203,14 @@ class AppConfig:
 
         def value(key: str, default: str = "") -> str:
             raw = file_values.get(key)
-            if raw is not None and str(raw).strip():
-                return str(raw).strip()
+            if raw is not None and str(raw).strip(): return str(raw).strip()
             return os.environ.get(key, default).strip()
 
         password = value("EFOS_DB_PASSWORD")
         user = runtime.get("user") or value("EFOS_DB_USER", "postgres")
         if runtime:
             vault = CredentialVault().get(RUNTIME_SECRET_TARGET)
-            if vault and vault[0] == user and vault[1]:
-                password = vault[1]
+            if vault and vault[0] == user and vault[1]: password = vault[1]
         if not password:
             raise ConfigurationError(
                 "No PostgreSQL password is configured. Add EFOS_DB_PASSWORD to a "
@@ -275,10 +218,8 @@ class AppConfig:
             )
 
         port_text = str(runtime.get("port") or value("EFOS_DB_PORT", "5432"))
-        try:
-            port = int(port_text)
-        except ValueError as exc:
-            raise ConfigurationError("EFOS_DB_PORT must be an integer.") from exc
+        try: port = int(port_text)
+        except ValueError as exc: raise ConfigurationError("EFOS_DB_PORT must be an integer.") from exc
 
         database = runtime.get("database") or value("EFOS_DB_NAME", "efos")
         host = runtime.get("host") or value("EFOS_DB_HOST", "localhost")
@@ -295,9 +236,7 @@ class AppConfig:
             admin_user=admin_user,
             admin_password=admin_password,
             deepseek_api_key=value("DEEPSEEK_API_KEY"),
-            deepseek_base_url=value(
-                "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
-            ).rstrip("/"),
+            deepseek_base_url=value("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
             deepseek_model=value("DEEPSEEK_MODEL", "deepseek-chat"),
             google_client_id=value("EFOS_GOOGLE_CLIENT_ID"),
             google_client_secret=value("EFOS_GOOGLE_CLIENT_SECRET"),

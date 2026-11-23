@@ -6,13 +6,11 @@ to PostgreSQL, workspace files, or logs. On platforms without the Windows vault
 the store degrades to process memory only (never a plaintext file).
 """
 from __future__ import annotations
-
 import ctypes
 import logging
 import sys
 from ctypes import wintypes
 from typing import Optional
-
 log = logging.getLogger(__name__)
 
 _TARGET_PREFIX = "EFOS/"
@@ -21,10 +19,7 @@ _CRED_PERSIST_LOCAL_MACHINE = 2
 
 
 class _FileTime(ctypes.Structure):
-    _fields_ = [
-        ("dwLowDateTime", wintypes.DWORD),
-        ("dwHighDateTime", wintypes.DWORD),
-    ]
+    _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
 
 
 class _CredentialW(ctypes.Structure):
@@ -43,9 +38,7 @@ class _CredentialW(ctypes.Structure):
         ("UserName", wintypes.LPWSTR),
     ]
 
-
 _PCREDENTIALW = ctypes.POINTER(_CredentialW)
-
 
 class CredentialVault:
     """Minimal wrapper around CredReadW / CredWriteW / CredDeleteW."""
@@ -69,11 +62,7 @@ class CredentialVault:
                     ctypes.POINTER(_PCREDENTIALW),
                 ]
                 self._advapi.CredReadW.restype = wintypes.BOOL
-                self._advapi.CredDeleteW.argtypes = [
-                    wintypes.LPCWSTR,
-                    wintypes.DWORD,
-                    wintypes.DWORD,
-                ]
+                self._advapi.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
                 self._advapi.CredDeleteW.restype = wintypes.BOOL
                 self._advapi.CredFree.argtypes = [ctypes.c_void_p]
                 self._advapi.CredFree.restype = None
@@ -82,8 +71,7 @@ class CredentialVault:
                 self._available = False
 
     @property
-    def available(self) -> bool:
-        return self._available
+    def available(self) -> bool: return self._available
 
     def _target(self, name: str) -> str:
         return name if name.startswith(_TARGET_PREFIX) else _TARGET_PREFIX + name
@@ -91,8 +79,7 @@ class CredentialVault:
     def set(self, name: str, username: str, secret: str) -> bool:
         target = self._target(name)
         self._memory[target] = (username, secret)
-        if not self._available:
-            return False
+        if not self._available: return False
         try:
             blob = secret.encode("utf-16-le")
             buffer = (ctypes.c_ubyte * max(1, len(blob))).from_buffer_copy(blob or b"\x00")
@@ -102,20 +89,14 @@ class CredentialVault:
             cred.TargetName = target
             cred.Comment = "EFOS protected credential"
             cred.CredentialBlobSize = len(blob)
-            cred.CredentialBlob = ctypes.cast(
-                buffer, ctypes.POINTER(ctypes.c_ubyte)
-            )
+            cred.CredentialBlob = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
             cred.Persist = _CRED_PERSIST_LOCAL_MACHINE
             cred.AttributeCount = 0
             cred.Attributes = None
             cred.TargetAlias = None
             cred.UserName = username or "EFOS"
             ok = bool(self._advapi.CredWriteW(ctypes.byref(cred), 0))
-            if not ok:
-                log.warning(
-                    "Credential vault write failed (winerror=%s)",
-                    ctypes.get_last_error(),
-                )
+            if not ok: log.warning("Credential vault write failed (winerror=%s)", ctypes.get_last_error())
             return ok
         except Exception as exc:  # pragma: no cover - Windows only
             log.warning("Credential vault write raised: %s", exc)
@@ -126,11 +107,7 @@ class CredentialVault:
         if self._available:
             pointer = _PCREDENTIALW()
             try:
-                ok = bool(
-                    self._advapi.CredReadW(
-                        target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
-                    )
-                )
+                ok = bool(self._advapi.CredReadW(target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)))
                 if ok and pointer:
                     cred = pointer.contents
                     size = int(cred.CredentialBlobSize)
@@ -142,18 +119,15 @@ class CredentialVault:
                 log.warning("Credential vault read raised: %s", exc)
             finally:
                 if pointer:
-                    try:
-                        self._advapi.CredFree(pointer)
-                    except Exception:
-                        pass
+                    try: self._advapi.CredFree(pointer)
+                    except Exception: pass
         return self._memory.get(target)
 
     def delete(self, name: str) -> None:
         target = self._target(name)
         self._memory.pop(target, None)
         if self._available:
-            try:
-                self._advapi.CredDeleteW(target, _CRED_TYPE_GENERIC, 0)
+            try: self._advapi.CredDeleteW(target, _CRED_TYPE_GENERIC, 0)
             except Exception:  # pragma: no cover - Windows only
                 pass
 

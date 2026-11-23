@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFrame,
@@ -24,15 +24,17 @@ from .flow_page import FlowWorkspace
 from .graph import LayoutStore
 from .icons import icon
 from .inspector import InspectorPanel
-from .theme import c, display_font, rgba, state_color
+from .theme import c, display_font, fs, rgba, state_color
 from .widgets import (
     Badge,
     Card,
     ClickableRow,
     Divider,
+    ElidedLabel,
     IconButton,
     InspectorSplitter,
     MetricCard,
+    PANE_GUTTER,
     SectionHeader,
     SegmentedControl,
     page_margins,
@@ -48,8 +50,7 @@ def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
             widget.hide()
             widget.setParent(None)
             widget.deleteLater()
-        elif child is not None:
-            _clear_layout(child)
+        elif child is not None: _clear_layout(child)
 
 class StatusRing(QWidget):
     def __init__(self, ready: int, active: int, parent: QWidget | None = None):
@@ -74,12 +75,12 @@ class StatusRing(QWidget):
         painter.setPen(pen)
         painter.drawArc(rect, 90 * 16, -int(360 * 16 * fraction))
         painter.setPen(QColor(c("text")))
-        font = QFont("Segoe UI Variable Display", 25)
+        font = QFont("Segoe UI Variable Display", fs(25))
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignmentFlag.AlignCenter, str(self.ready))
         painter.setPen(QColor(c("muted")))
-        small = QFont("Segoe UI", 8)
+        small = QFont("Segoe UI", fs(8))
         small.setBold(True)
         small.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
         painter.setFont(small)
@@ -110,9 +111,7 @@ class OverviewPage(QWidget):
         self.view = view
         _clear_layout(self.content)
         snapshot = view.snapshot
-        active = [
-            task for task in snapshot.tasks.values() if task.current_state.is_active
-        ]
+        active = [task for task in snapshot.tasks.values() if task.current_state.is_active]
         ready = [
             task
             for task in active
@@ -164,16 +163,16 @@ class OverviewPage(QWidget):
         left = QVBoxLayout()
         left.setSpacing(8)
         eyebrow = QLabel(datetime.now().strftime("%A · %B %d").upper())
-        eyebrow.setStyleSheet(f"color: {c('accent')}; font-size: 10px; font-weight: 700; letter-spacing: 2px;")
+        eyebrow.setStyleSheet(f"color: {c('accent')}; font-size: {fs(10)}px; font-weight: 700; letter-spacing: 2px;")
         left.addWidget(eyebrow)
         title = QLabel("The Big Picture")
         title.setStyleSheet(
             f"color: {c('text')}; font-family: 'Segoe UI Variable Display'; "
-            "font-size: 29px; font-weight: 650;"
+            f"font-size: {fs(29)}px; font-weight: 650;"
         )
         left.addWidget(title)
         description = QLabel("Task status and Project resolution is based on satisfying preconditions and prerequisites. ")
-        description.setStyleSheet(f"color: {c('muted')}; font-size: 12px;")
+        description.setStyleSheet(f"color: {c('muted')}; font-size: {fs(12)}px;")
         description.setWordWrap(True)
         left.addWidget(description)
         left.addSpacing(6)
@@ -189,11 +188,11 @@ class OverviewPage(QWidget):
             number = QLabel(value)
             number.setStyleSheet(
                 f"color: {c(tone)}; font-family: 'Segoe UI Variable Display'; "
-                "font-size: 21px; font-weight: 650;"
+                f"font-size: {fs(21)}px; font-weight: 650;"
             )
             block.addWidget(number)
             text = QLabel(label)
-            text.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+            text.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
             block.addWidget(text)
             stats.addLayout(block)
         left.addLayout(stats)
@@ -230,8 +229,7 @@ class OverviewPage(QWidget):
             ("Scheduled blocks", str(len(scheduled)), "local timeline", "calendar", "accent"),
             ("Blocked tasks", str(blocked), "unresolved dependency", "lock", "amber"),
         ]
-        for label, value, hint, icon_name, tone in cards:
-            layout.addWidget(MetricCard(label, value, hint, icon_name, tone), 1)
+        for label, value, hint, icon_name, tone in cards: layout.addWidget(MetricCard(label, value, hint, icon_name, tone), 1)
         return layout
 
     # ------------------------------------------------------------- ready
@@ -278,13 +276,12 @@ class OverviewPage(QWidget):
             text = QVBoxLayout()
             text.setSpacing(1)
             title = QLabel(truncate(task.name, 54))
-            title.setStyleSheet(f"color: {c('text')}; font-size: 12px; font-weight: 600;")
+            title.setStyleSheet(f"color: {c('text')}; font-size: {fs(12)}px; font-weight: 600;")
             text.addWidget(title)
             meta_parts = [schedule_span(task)]
-            if task.has_custom_availability:
-                meta_parts.append(availability_summary(task.availability))
+            if task.has_custom_availability: meta_parts.append(availability_summary(task.availability))
             meta = QLabel(" · ".join(meta_parts))
-            meta.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
+            meta.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px;")
             text.addWidget(meta)
             row_layout.addLayout(text, 1)
             row_layout.addWidget(Badge("READY", "ready"))
@@ -324,24 +321,24 @@ class OverviewPage(QWidget):
             date.setAlignment(Qt.AlignmentFlag.AlignCenter)
             date.setStyleSheet(
                 f"color: {c('accent')}; font-family: 'Segoe UI Variable Display'; "
-                "font-size: 17px; font-weight: 650;"
+                f"font-size: {fs(17)}px; font-weight: 650;"
             )
             day.addWidget(date)
             month = QLabel(task.scheduled_start.strftime("%b").upper() if task.scheduled_start else "")
             month.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            month.setStyleSheet(f"color: {c('faint')}; font-size: 8px; font-weight: 700;")
+            month.setStyleSheet(f"color: {c('faint')}; font-size: {fs(8)}px; font-weight: 700;")
             day.addWidget(month)
             row_layout.addLayout(day)
             text = QVBoxLayout()
             text.setSpacing(1)
             title = QLabel(truncate(task.name, 42))
-            title.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px; font-weight: 600;")
+            title.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px; font-weight: 600;")
             text.addWidget(title)
             when = QLabel(
                 f"{task.scheduled_start.strftime('%H:%M') if task.scheduled_start else ''} – "
                 f"{task.scheduled_end.strftime('%H:%M') if task.scheduled_end else ''}"
             )
-            when.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
+            when.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px;")
             text.addWidget(when)
             row_layout.addLayout(text, 1)
             row_layout.addWidget(Badge(task.current_state.label, task.current_state.value))
@@ -378,14 +375,14 @@ class OverviewPage(QWidget):
             text = QVBoxLayout()
             text.setSpacing(1)
             title = QLabel(truncate(project.name, 36))
-            title.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px; font-weight: 600;")
+            title.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px; font-weight: 600;")
             text.addWidget(title)
             meta = QLabel(
                 "Requirements Undefined"
                 if project.resolution_conditions_unknown
                 else f"{self.view.snapshot.dependency_count(NodeRef(NodeKind.PROJECT, project.id))} dependencies"
             )
-            meta.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+            meta.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
             text.addWidget(meta)
             row_layout.addLayout(text, 1)
             row_layout.addWidget(Badge(project.current_state.label, project.current_state.value))
@@ -410,7 +407,7 @@ class OverviewPage(QWidget):
             row = QHBoxLayout()
             row.setSpacing(8)
             name = QLabel(label)
-            name.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+            name.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
             name.setFixedWidth(60)
             row.addWidget(name)
             track = QFrame()
@@ -425,7 +422,7 @@ class OverviewPage(QWidget):
             track_layout.addStretch(1)
             row.addWidget(track, 1)
             number = QLabel(str(count))
-            number.setStyleSheet(f"color: {c(tone)}; font-size: 10px; font-weight: 700;")
+            number.setStyleSheet(f"color: {c(tone)}; font-size: {fs(10)}px; font-weight: 700;")
             number.setFixedWidth(24)
             number.setAlignment(Qt.AlignmentFlag.AlignRight)
             row.addWidget(number)
@@ -445,20 +442,19 @@ class OverviewPage(QWidget):
         ):
             row = QHBoxLayout()
             dot = QLabel("●")
-            dot.setStyleSheet(f"color: {c(tone)}; font-size: 8px;")
+            dot.setStyleSheet(f"color: {c(tone)}; font-size: {fs(8)}px;")
             row.addWidget(dot)
             name = QLabel(label)
-            name.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+            name.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
             row.addWidget(name, 1)
             number = QLabel(str(value))
-            number.setStyleSheet(f"color: {c('text_soft')}; font-size: 10px; font-weight: 600;")
+            number.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(10)}px; font-weight: 600;")
             row.addWidget(number)
             layout.addLayout(row)
         layout.addStretch(1)
         return frame
 
-    def _event_count(self) -> str:
-        return "append-only"
+    def _event_count(self) -> str: return "append-only"
 
     def _empty(self) -> QWidget:
         frame = Card()
@@ -487,13 +483,13 @@ class OverviewPage(QWidget):
         layout.addLayout(actions)
         return frame
 
-
 class DashboardPage(QWidget):
     create_requested = pyqtSignal(object)
     open_node = pyqtSignal(object)
     mutated = pyqtSignal(str)
     toast_requested = pyqtSignal(str, str)
     open_registry = pyqtSignal()
+    layout_mode_changed = pyqtSignal(str)
 
     def __init__(self, service: EFOSService, layout_store: LayoutStore, parent: QWidget | None = None):
         super().__init__(parent)
@@ -515,19 +511,58 @@ class DashboardPage(QWidget):
         page_margins(root)
         root.setSpacing(12)
 
-        # One compact toolbar row replaces the retired "Dashboard" heading.
-        # The window header already reads WORKSPACE / Dashboard, so the row
-        # carries only Manage | Flow, the Flow-only canvas tools, and the
-        # create actions — exactly one Registry/Assistant toolbar tall.
-        self.toolbar, toolbar_layout = toolbar_row()
+        self._syncing_toolbar = False
+        self.toolbar, self.toolbar_layout = toolbar_row()
+        self.toolbar_layout.setSpacing(0)
+
+        # Left toolbar zone: exact width of the left Tasks / Flow canvas frame
+        self.left_toolbar = QWidget()
+        left_tb_layout = QHBoxLayout(self.left_toolbar)
+        left_tb_layout.setContentsMargins(0, 0, 0, 0)
+        left_tb_layout.setSpacing(8)
+
         self.tabs = SegmentedControl(["Manage", "Flow"])
         self.tabs.setMinimumHeight(30)
         self.tabs.setFixedWidth(168)
         self.tabs.changed.connect(self._switch_tab)
-        toolbar_layout.addWidget(self.tabs)
+        left_tb_layout.addWidget(self.tabs)
+
+        left_tb_layout.addStretch(1)
+        self.canvas_title = ElidedLabel("Active Workspace")
+        self.canvas_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.canvas_title.setFont(display_font(18, QFont.Weight.DemiBold))
+        self.canvas_title.setStyleSheet(
+            f"color: {c('text')}; font-family: 'Segoe UI Variable Display'; "
+            f"font-size: {fs(18)}px; font-weight: 650;"
+        )
+
+        left_tb_layout.addWidget(self.canvas_title)
+        left_tb_layout.addStretch(1)
+
+        # Right flank of left toolbar: fixed width matching tabs (168 px) so
+        # canvas_title stays dead-center over the left frame on both tabs.
+        self.left_right_flank = QWidget()
+        self.left_right_flank.setFixedWidth(196)
+        flank_layout = QHBoxLayout(self.left_right_flank)
+        flank_layout.setContentsMargins(0, 0, 0, 0)
+        flank_layout.setSpacing(0)
+        flank_layout.addStretch(1)
         self.flow_tools = self._flow_tools()
-        toolbar_layout.addWidget(self.flow_tools)
-        toolbar_layout.addStretch(1)
+        flank_layout.addWidget(self.flow_tools)
+        left_tb_layout.addWidget(self.left_right_flank)
+
+        self.toolbar_layout.addWidget(self.left_toolbar, 1)
+
+        # Center gutter matching the splitter handle width
+        self.toolbar_gutter = QWidget()
+        self.toolbar_gutter.setFixedWidth(PANE_GUTTER)
+        self.toolbar_layout.addWidget(self.toolbar_gutter)
+
+        # Right toolbar zone: sits directly above the InspectorPanel
+        self.right_toolbar = QWidget()
+        right_tb_layout = QHBoxLayout(self.right_toolbar)
+        right_tb_layout.setContentsMargins(0, 0, 0, 0)
+        right_tb_layout.setSpacing(6)
         for kind, label, icon_name in (
             (NodeKind.TASK, "New task", "task"),
             (NodeKind.PROJECT, "New project", "project"),
@@ -535,9 +570,12 @@ class DashboardPage(QWidget):
         ):
             button = QPushButton(label)
             button.setIcon(icon(icon_name, c("muted"), 14))
+            button.setToolTip(label)
             button.clicked.connect(lambda _=False, k=kind: self.create_requested.emit(k))
             self._create_buttons.append(button)
-            toolbar_layout.addWidget(button)
+            right_tb_layout.addWidget(button, 1)
+        self.toolbar_layout.addWidget(self.right_toolbar)
+
         root.addWidget(self.toolbar)
 
         self.stack = QStackedWidget()
@@ -545,6 +583,7 @@ class DashboardPage(QWidget):
         self.manage = self._build_manage()
         self.stack.addWidget(self.manage)
         self.stack.addWidget(self.flow)
+        self._wire_toolbar_splitters()
         self._sync_toolbar()
 
     # ---------------------------------------------------------------- toolbar
@@ -553,15 +592,19 @@ class DashboardPage(QWidget):
         layout = QHBoxLayout(holder)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        self.layout_button = IconButton("layout", "Auto layout")
+        self.align_button = IconButton("align_start", "Auto-layout: From start (click for To finish)", size=22)
+        self.align_button.clicked.connect(self._toggle_layout_mode)
+        self.layout_button = IconButton("layout", "Auto layout", size=22)
         self.layout_button.clicked.connect(lambda: self.flow.auto_layout())
-        self.fit_button = IconButton("fit", "Fit to content")
+        self.fit_button = IconButton("fit", "Fit to content", size=22)
         self.fit_button.clicked.connect(lambda: self.flow.viewport.fit_content())
-        self.zoom_out_button = IconButton("zoom_out", "Zoom out")
+        self.zoom_out_button = IconButton("zoom_out", "Zoom out", size=22)
         self.zoom_out_button.clicked.connect(lambda: self.flow.viewport.zoom_out())
-        self.zoom_in_button = IconButton("zoom_in", "Zoom in")
+        self.zoom_in_button = IconButton("zoom_in", "Zoom in", size=22)
         self.zoom_in_button.clicked.connect(lambda: self.flow.viewport.zoom_in())
+
         for button in (
+            self.align_button,
             self.layout_button,
             self.fit_button,
             self.zoom_out_button,
@@ -570,9 +613,89 @@ class DashboardPage(QWidget):
             layout.addWidget(button)
         return holder
 
+    def set_layout_mode(self, mode: str, *, relayout: bool = False) -> None:
+        normalized = "sink" if mode == "sink" else "source"
+        self.flow.set_layout_mode(normalized, relayout=relayout)
+        if normalized == "sink":
+            self.align_button.setIcon(icon("align_finish", c("muted"), 22))
+            self.align_button.setToolTip("Auto-layout: To finish (click for From start)")
+        else:
+            self.align_button.setIcon(icon("align_start", c("muted"), 22))
+            self.align_button.setToolTip("Auto-layout: From start (click for To finish)")
+
+    def _toggle_layout_mode(self) -> None:
+        new_mode = "sink" if self.flow.layout_mode == "source" else "source"
+        self.set_layout_mode(new_mode, relayout=True)
+        self.layout_mode_changed.emit(new_mode)
+
+    def _active_splitter(self):  # type: ignore[no-untyped-def]
+        """Return the splitter beneath the visible tab once it has been built."""
+        flow_splitter = getattr(self.flow, "splitter", None)
+        if self.stack.currentIndex() == 1 and flow_splitter is not None: return flow_splitter
+        return getattr(self, "splitter", None)
+
+    def _inspector_width(self) -> int:
+        """Current width of the Inspector pane so right_toolbar stays aligned."""
+        splitter = self._active_splitter()
+        if splitter is None: return 360
+        sizes = splitter.sizes()
+        if len(sizes) >= 2 and sizes[1] > 0: return int(sizes[1])
+        pane = splitter.pane_width() if hasattr(splitter, "pane_width") else None
+        return int(pane or 360)
+
+    def _sync_toolbar_geometry(self) -> None:
+        """Match left_toolbar to the left pane and right_toolbar to the Inspector."""
+        if self._syncing_toolbar: return
+        if not hasattr(self, "right_toolbar") or not hasattr(self, "stack"): return
+        self._syncing_toolbar = True
+        try:
+            splitter = self._active_splitter()
+            gutter = splitter.handleWidth() if splitter is not None else PANE_GUTTER
+            self.toolbar_gutter.setFixedWidth(max(0, gutter))
+            self.right_toolbar.setFixedWidth(self._inspector_width())
+        finally: self._syncing_toolbar = False
+
     def _sync_toolbar(self) -> None:
-        """Show the Flow canvas tools only while the Flow tab is active."""
-        self.flow_tools.setVisible(self.stack.currentIndex() == 1)
+        """Show the Flow canvas tools on Flow and title the shared toolbar row."""
+        is_flow = self.stack.currentIndex() == 1
+        self.canvas_title.setText("Dependency Canvas" if is_flow else "Active Workspace")
+        self.flow_tools.setVisible(is_flow)
+        self._sync_toolbar_geometry()
+
+    def sync_toolbar(self) -> None:
+        """Re-sync the shared toolbar after a rebuild or Inspector resize."""
+        if not hasattr(self, "stack"): return
+        self._sync_toolbar()
+
+    def _wire_toolbar_splitters(self) -> None:
+        for splitter in (getattr(self, "splitter", None), self.flow.splitter):
+            if splitter is None: continue
+            splitter.splitterMoved.connect(lambda *_args: self._sync_toolbar_geometry())
+
+    # ------------------------------------------------------------ flow state
+    def capture_flow_state(self) -> dict | None:
+        """Snapshot the Flow canvas zoom and centre before a rebuild."""
+        try: return self.flow.capture_view_state()
+        except Exception: return None
+
+    def restore_flow_state(self, state: dict | None) -> bool:
+        """Restore a snapshot captured by :meth:`capture_flow_state`."""
+        if not state: return False
+        return self.flow.restore_view_state(state)
+
+    # ----------------------------------------------------------------- events
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        # A rebuild or a page switch can land here with a stale toolbar; always
+        # mirror the visible tab's controls whenever the Dashboard is shown.
+        self._sync_toolbar()
+        # The splitters apply their remembered Inspector width on their own
+        # show events, so re-align once the layout has settled.
+        QTimer.singleShot(0, self._sync_toolbar_geometry)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._sync_toolbar_geometry()
 
     # ---------------------------------------------------------------- manage
     def _build_manage(self) -> QWidget:
@@ -617,17 +740,14 @@ class DashboardPage(QWidget):
                 and self.selected_ref.id in view.snapshot.tasks
                 and view.snapshot.tasks[self.selected_ref.id].current_state.is_terminal
             )
-            if view.snapshot.exists(self.selected_ref) and not hidden:
-                self.manage_inspector.set_view(view)
+            if view.snapshot.exists(self.selected_ref) and not hidden: self.manage_inspector.set_view(view)
             else:
                 self.selected_ref = None
                 self.manage_inspector.set_ref(None, view)
-        else:
-            self.manage_inspector.set_ref(None, view)
+        else: self.manage_inspector.set_ref(None, view)
 
     def _populate_manage(self) -> None:
-        if self.view is None:
-            return
+        if self.view is None: return
         _clear_layout(self.manage_content)
         snapshot = self.view.snapshot
         active_tasks = sorted(
@@ -687,15 +807,13 @@ class DashboardPage(QWidget):
                 empty="No conditions.",
             ),
         }
-        for group in self._group_widgets.values():
-            self.manage_content.addWidget(group)
+        for group in self._group_widgets.values(): self.manage_content.addWidget(group)
         self.manage_content.addStretch(1)
 
     @staticmethod
     def _task_meta(task) -> str:  # type: ignore[no-untyped-def]
         parts = [schedule_span(task)]
-        if task.has_custom_availability:
-            parts.append(availability_summary(task.availability))
+        if task.has_custom_availability: parts.append(availability_summary(task.availability))
         return " · ".join(parts)
 
     def _group(self, title: str, subtitle: str, rows: list[QWidget], *, empty: str) -> QWidget:
@@ -710,8 +828,7 @@ class DashboardPage(QWidget):
             label.setProperty("role", "muted")
             label.setContentsMargins(4, 10, 4, 10)
             layout.addWidget(label)
-        for row in rows:
-            layout.addWidget(row)
+        for row in rows: layout.addWidget(row)
         return frame
 
     def _record_row(self, ref: NodeRef, name: str, icon_name: str, state, meta: str) -> QWidget:
@@ -729,12 +846,12 @@ class DashboardPage(QWidget):
         text.setSpacing(0)
         title = QLabel(truncate(name, 62))
         title.setStyleSheet(
-            f"color: {c('text')}; font-size: 12px; "
+            f"color: {c('text')}; font-size: {fs(12)}px; "
             f"font-weight: {'700' if self.selected_ref == ref else '600'};"
         )
         text.addWidget(title)
         sub = QLabel(meta)
-        sub.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+        sub.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
         text.addWidget(sub)
         layout.addLayout(text, 1)
         if ref.kind is NodeKind.CONDITION:
@@ -743,8 +860,7 @@ class DashboardPage(QWidget):
             label = condition_truth_label(state)
             tone = "true" if state is True else ("false" if state is False else "unknown")
             layout.addWidget(Badge(label, tone))
-        else:
-            layout.addWidget(Badge(str(state).upper(), str(state)))
+        else: layout.addWidget(Badge(str(state).upper(), str(state)))
         if self.selected_ref == ref:
             row.setStyleSheet(
                 f"ClickableRow {{ background: {rgba('accent', 0.10)}; "
@@ -759,8 +875,7 @@ class DashboardPage(QWidget):
         self.flow.flush_notes()
         self.stack.setCurrentIndex(index)
         self._sync_toolbar()
-        if index == 1:
-            self.flow.maybe_startup_layout()
+        if index == 1: self.flow.maybe_startup_layout()
 
     def show_manage(self) -> None:
         self.tabs.select(0, emit=False)
@@ -777,15 +892,12 @@ class DashboardPage(QWidget):
         """Scroll the Manage queue to a named group (Tasks/Projects/Conditions)."""
         self.show_manage()
         group = self._group_widgets.get(name)
-        if group is None:
-            return
+        if group is None: return
         self.manage_scroll.ensureWidgetVisible(group, 0, 0)
 
     def select_manage(self, ref: NodeRef) -> None:
-        if self.view is None:
-            return
-        if not self.manage_inspector.commit_note():
-            return
+        if self.view is None: return
+        if not self.manage_inspector.commit_note(): return
         if not self.view.snapshot.exists(ref):
             self.toast_requested.emit("That record no longer exists.", "error")
             return
@@ -798,8 +910,7 @@ class DashboardPage(QWidget):
         self.show_flow()
         return self.flow.select_ref(ref)
 
-    def _flow_mutated(self, message: str) -> None:
-        self.mutated.emit(message)
+    def _flow_mutated(self, message: str) -> None: self.mutated.emit(message)
 
     def flush_notes(self) -> bool:
         manage_ok = self.manage_inspector.commit_note()

@@ -1,10 +1,8 @@
 """Application service layer: transactional mutations and derived reconciliation."""
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-
 from .calendar_service import CalendarService
 from .config import AppConfig
 from .db import Database
@@ -62,17 +60,13 @@ class WorkspaceView:
     changes: list[StateChange] = field(default_factory=list)
     recommendation: Recommendation | None = None
 
-    def status_for(self, ref: NodeRef):
-        return self.evaluation.for_ref(ref)
+    def status_for(self, ref: NodeRef): return self.evaluation.for_ref(ref)
 
-    def gate_for_task(self, task_id: str) -> bool:
-        return self.evaluation.task_status(task_id).ready
+    def gate_for_task(self, task_id: str) -> bool: return self.evaluation.task_status(task_id).ready
 
-    def gate_for_project(self, project_id: str) -> bool:
-        return self.evaluation.project_status(project_id).ready
+    def gate_for_project(self, project_id: str) -> bool: return self.evaluation.project_status(project_id).ready
 
-    def condition_value(self, condition_id: str) -> bool | None:
-        return self.evaluation.condition_value(condition_id)
+    def condition_value(self, condition_id: str) -> bool | None: return self.evaluation.condition_value(condition_id)
 
     @property
     def active_tasks(self) -> list[Task]:
@@ -91,17 +85,13 @@ class EFOSService:
         self._blocked_logged: set[tuple[str, str]] = set()
 
     # ---------------------------------------------------------------- lifecycle
-    def start(self) -> None:
-        self.db.connect()
+    def start(self) -> None: self.db.connect()
 
     def close(self) -> None:
-        try:
-            self.db.close()
-        except Exception:
-            pass
+        try: self.db.close()
+        except Exception: pass
 
-    def connection_status(self) -> ConnectionStatus:
-        return self.repo.connection_status()
+    def connection_status(self) -> ConnectionStatus: return self.repo.connection_status()
 
     # ------------------------------------------------------------------ loading
     def load_view(self, *, reconcile: bool = True) -> WorkspaceView:
@@ -112,12 +102,10 @@ class EFOSService:
             failed: set[tuple[str, str]] = set()
             for _ in range(12):
                 plan = reconcile_plan(snapshot, evaluation)
-                if plan.empty:
-                    break
+                if plan.empty: break
                 applied = False
                 for task_id, target in plan.task_targets.items():
-                    if ("task", task_id) in failed:
-                        continue
+                    if ("task", task_id) in failed: continue
                     task = snapshot.tasks[task_id]
                     try:
                         self.repo.transition_task(
@@ -142,8 +130,7 @@ class EFOSService:
                         )
                     )
                 for project_id, target in plan.project_targets.items():
-                    if ("project", project_id) in failed:
-                        continue
+                    if ("project", project_id) in failed: continue
                     project = snapshot.projects[project_id]
                     try:
                         self.repo.transition_project(
@@ -169,22 +156,19 @@ class EFOSService:
                             target.value,
                         )
                     )
-                if not applied:
-                    break
+                if not applied: break
                 snapshot = self.repo.snapshot()
                 evaluation = evaluate_workspace(snapshot)
         recommendation = recommend(snapshot, evaluation)
         return WorkspaceView(snapshot, evaluation, changes, recommendation)
 
-    def refresh(self) -> WorkspaceView:
-        return self.load_view(reconcile=True)
+    def refresh(self) -> WorkspaceView: return self.load_view(reconcile=True)
 
     def _log_blocked(
         self, kind: str, object_id: str, name: str, target: str, exc: Exception
     ) -> None:
         key = (kind, object_id)
-        if key in self._blocked_logged:
-            return
+        if key in self._blocked_logged: return
         try:
             self.repo.append_event(
                 "reconciliation.blocked",
@@ -194,8 +178,7 @@ class EFOSService:
                 {"error": str(exc)[:300], "target": target},
             )
             self._blocked_logged.add(key)
-        except Exception:
-            pass
+        except Exception: pass
 
     # ---------------------------------------------------------------- creates
     def create_task(
@@ -256,10 +239,8 @@ class EFOSService:
     def complete_task(self, task_id: str) -> None:
         view = self.load_view(reconcile=False)
         task = view.snapshot.tasks.get(task_id)
-        if not task:
-            raise NotFoundError("The task no longer exists.")
-        if task.current_state is TaskState.COMPLETED:
-            raise ConflictError("The task is already completed.")
+        if not task: raise NotFoundError("The task no longer exists.")
+        if task.current_state is TaskState.COMPLETED: raise ConflictError("The task is already completed.")
         if task.current_state is TaskState.DEFERRED:
             raise ConflictError("A deferred task must be reopened before completion.")
         if task.current_state is not TaskState.READY:
@@ -276,10 +257,8 @@ class EFOSService:
     def defer_task(self, task_id: str) -> None:
         view = self.load_view(reconcile=False)
         task = view.snapshot.tasks.get(task_id)
-        if not task:
-            raise NotFoundError("The task no longer exists.")
-        if not task.current_state.is_active:
-            raise ConflictError("Only active tasks can be deferred.")
+        if not task: raise NotFoundError("The task no longer exists.")
+        if not task.current_state.is_active: raise ConflictError("Only active tasks can be deferred.")
         validate_task_transition(task.current_state, TaskState.DEFERRED)
         self.repo.transition_task(task_id, TaskState.DEFERRED, expected=task.current_state, reason="deferred")
         self.load_view()
@@ -287,8 +266,7 @@ class EFOSService:
     def reopen_task(self, task_id: str) -> None:
         view = self.load_view(reconcile=False)
         task = view.snapshot.tasks.get(task_id)
-        if not task:
-            raise NotFoundError("The task no longer exists.")
+        if not task: raise NotFoundError("The task no longer exists.")
         if task.current_state not in (TaskState.COMPLETED, TaskState.DEFERRED):
             raise ConflictError("Only completed or deferred tasks can be reopened.")
         target = (
@@ -304,8 +282,7 @@ class EFOSService:
     def shelve_project(self, project_id: str) -> None:
         view = self.load_view(reconcile=False)
         project = view.snapshot.projects.get(project_id)
-        if not project:
-            raise NotFoundError("The project no longer exists.")
+        if not project: raise NotFoundError("The project no longer exists.")
         if project.current_state is ProjectState.SHELVED:
             raise ConflictError("The project is already shelved.")
         if project.current_state is ProjectState.RESOLVED:
@@ -320,8 +297,7 @@ class EFOSService:
     def stall_project(self, project_id: str) -> None:
         view = self.load_view(reconcile=False)
         project = view.snapshot.projects.get(project_id)
-        if not project:
-            raise NotFoundError("The project no longer exists.")
+        if not project: raise NotFoundError("The project no longer exists.")
         if project.current_state is not ProjectState.ACTIVE:
             raise ConflictError("Only active projects can be marked stalled.")
         self.repo.transition_project(project_id, ProjectState.STALLED, expected=project.current_state, reason="stalled")
@@ -333,8 +309,7 @@ class EFOSService:
     def _project_to_active(self, project_id: str, expected_state: ProjectState, reason: str) -> None:
         view = self.load_view(reconcile=False)
         project = view.snapshot.projects.get(project_id)
-        if not project:
-            raise NotFoundError("The project no longer exists.")
+        if not project: raise NotFoundError("The project no longer exists.")
         if project.current_state is not expected_state:
             raise ConflictError(f"The project is not {expected_state.value}.")
         self.repo.transition_project(project_id, ProjectState.ACTIVE, expected=project.current_state, reason=reason)
@@ -346,10 +321,8 @@ class EFOSService:
         kind = validate_connection(view.snapshot, source, target)
         if kind is EdgeKind.PRECONDITION:
             inserted = self.repo.add_precondition(target.kind, target.id, source.id)
-        else:
-            inserted = self.repo.add_prerequisite(target.kind, target.id, source)
-        if not inserted:
-            raise ConflictError("That dependency is already attached.")
+        else: inserted = self.repo.add_prerequisite(target.kind, target.id, source)
+        if not inserted: raise ConflictError("That dependency is already attached.")
         self.load_view()
         return kind
 
@@ -358,10 +331,8 @@ class EFOSService:
         self._ensure_target_editable(view, edge.target)
         if edge.kind is EdgeKind.PRECONDITION:
             removed = self.repo.remove_precondition(edge.target.kind, edge.target.id, edge.source.id)
-        else:
-            removed = self.repo.remove_prerequisite(edge.target.kind, edge.target.id, edge.source)
-        if not removed:
-            raise NotFoundError("That dependency no longer exists.")
+        else: removed = self.repo.remove_prerequisite(edge.target.kind, edge.target.id, edge.source)
+        if not removed: raise NotFoundError("That dependency no longer exists.")
         # Full deterministic cascade: every downstream node is re-evaluated.
         self.load_view()
 
@@ -404,21 +375,17 @@ class EFOSService:
         self.load_view()
 
     # ------------------------------------------------------------------ notes
-    def get_note(self, ref: NodeRef) -> str:
-        return self.repo.get_note(ref.kind, ref.id)
+    def get_note(self, ref: NodeRef) -> str: return self.repo.get_note(ref.kind, ref.id)
 
     def save_note(self, ref: NodeRef, content: str) -> bool:
-        if not (content or "").strip():
-            return False
+        if not (content or "").strip(): return False
         self.repo.save_note(ref.kind, ref.id, content)
         return True
 
-    def delete_note(self, ref: NodeRef) -> None:
-        self.repo.delete_note(ref.kind, ref.id)
+    def delete_note(self, ref: NodeRef) -> None: self.repo.delete_note(ref.kind, ref.id)
 
     # ------------------------------------------------------------- recurrence
-    def get_rule(self, task_id: str) -> RecurrenceRule | None:
-        return self.repo.get_rule(task_id)
+    def get_rule(self, task_id: str) -> RecurrenceRule | None: return self.repo.get_rule(task_id)
 
     def save_rule(
         self,
@@ -458,10 +425,8 @@ class EFOSService:
         """One scheduler pulse: recurrence sweep plus derived reconciliation."""
         results = self.recurrence_pulse(now)
         changes: list[StateChange] = []
-        try:
-            changes = self.load_view().changes
-        except EFOSError:
-            return results, changes
+        try: changes = self.load_view().changes
+        except EFOSError: return results, changes
         return results, changes
 
     def recurrence_pulse(self, now: datetime | None = None) -> list[tuple[str, str, str]]:
@@ -475,19 +440,15 @@ class EFOSService:
         results: list[tuple[str, str, str]] = []
         for task, rule in self.repo.recurring_tasks():
             occurrence = recurrence_due(rule, now)
-            if occurrence is None:
-                continue
-            try:
-                fired, message = self.repo.fire_recurrence(task.id, occurrence)
+            if occurrence is None: continue
+            try: fired, message = self.repo.fire_recurrence(task.id, occurrence)
             except Exception as exc:  # pragma: no cover - defensive
                 results.append((task.id, task.name, f"error: {str(exc)[:120]}"))
                 continue
             results.append((task.id, task.name, message))
             if fired:
-                try:
-                    self.load_view()
-                except Exception:
-                    pass
+                try: self.load_view()
+                except Exception: pass
         return results
 
     # --------------------------------------------------------------- schedule
@@ -513,8 +474,7 @@ class EFOSService:
                     detail="Local EFOS task block",
                 )
             )
-        for event in self.repo.calendar_events_between(start, end):
-            items.append(event)
+        for event in self.repo.calendar_events_between(start, end): items.append(event)
         items.sort(key=lambda item: item.start)
         return items
 
@@ -522,9 +482,7 @@ class EFOSService:
         self.repo.update_task_schedule(task_id, start, end)
         self.load_view()
 
-    def save_task_availability(
-        self, task_id: str, windows: list[AvailabilityWindow]
-    ) -> None:
+    def save_task_availability(self, task_id: str, windows: list[AvailabilityWindow]) -> None:
         """Persist optional temporal availability; never changes Task Status."""
         self.repo.save_task_availability(task_id, windows)
         self.load_view()
@@ -537,8 +495,7 @@ class EFOSService:
     def calendar_items(self, start: datetime, end: datetime) -> list[CalendarItem]:
         items: list[CalendarItem] = []
         for task in self.repo.scheduled_tasks_between(start, end):
-            if task.current_state.is_terminal:
-                continue
+            if task.current_state.is_terminal: continue
             assert task.scheduled_start and task.scheduled_end
             items.append(
                 CalendarItem(
@@ -557,24 +514,19 @@ class EFOSService:
         return items
 
     # --------------------------------------------------------------- calendar
-    def calendar_sync_state(self) -> SyncState:
-        return self.calendar.sync_state()
+    def calendar_sync_state(self) -> SyncState: return self.calendar.sync_state()
 
     def sync_calendar(self, *, force_full: bool = False) -> SyncState:
         return self.calendar.sync(force_full=force_full)
 
-    def connect_calendar(self) -> SyncState:
-        return self.calendar.connect()
+    def connect_calendar(self) -> SyncState: return self.calendar.connect()
 
-    def disconnect_calendar(self) -> None:
-        self.calendar.disconnect()
+    def disconnect_calendar(self) -> None: self.calendar.disconnect()
 
     # ------------------------------------------------------------- assistant
-    def threads(self) -> list[ChatThread]:
-        return self.repo.list_threads()
+    def threads(self) -> list[ChatThread]: return self.repo.list_threads()
 
-    def create_thread(self, title: str = "New conversation") -> str:
-        return self.repo.create_thread(title)
+    def create_thread(self, title: str = "New conversation") -> str: return self.repo.create_thread(title)
 
     def load_thread(self, thread_id: str) -> tuple[ChatThread, list[ChatMessage]]:
         return self.repo.load_thread(thread_id)
@@ -588,14 +540,11 @@ class EFOSService:
     ) -> str:
         return self.repo.append_message(thread_id, role, content, metadata)
 
-    def delete_thread(self, thread_id: str) -> None:
-        self.repo.delete_thread(thread_id)
+    def delete_thread(self, thread_id: str) -> None: self.repo.delete_thread(thread_id)
 
-    def rename_thread(self, thread_id: str, title: str) -> None:
-        self.repo.rename_thread(thread_id, title)
+    def rename_thread(self, thread_id: str, title: str) -> None: self.repo.rename_thread(thread_id, title)
 
-    def custom_queries(self) -> list[CustomQuery]:
-        return self.repo.list_custom_queries()
+    def custom_queries(self) -> list[CustomQuery]: return self.repo.list_custom_queries()
 
     def create_custom_query(self, label: str, prompt: str, *, favorite: bool = False) -> str:
         return self.repo.create_custom_query(label, prompt, favorite=favorite)
@@ -610,8 +559,7 @@ class EFOSService:
     ) -> None:
         self.repo.update_custom_query(query_id, label=label, prompt=prompt, favorite=favorite)
 
-    def delete_custom_query(self, query_id: str) -> None:
-        self.repo.delete_custom_query(query_id)
+    def delete_custom_query(self, query_id: str) -> None: self.repo.delete_custom_query(query_id)
 
     def set_custom_query_favorite(self, query_id: str, favorite: bool) -> None:
         self.repo.set_custom_query_favorite(query_id, favorite)
@@ -652,9 +600,7 @@ class EFOSService:
             + sum(len(v) for v in snapshot.project_preconditions.values()),
             "prerequisites": sum(len(v) for v in snapshot.task_prerequisites.values())
             + sum(len(v) for v in snapshot.project_prerequisites.values()),
-            "custom_availability_tasks": sum(
-                1 for task in snapshot.tasks.values() if task.has_custom_availability
-            ),
+            "custom_availability_tasks": sum(1 for task in snapshot.tasks.values() if task.has_custom_availability),
             "links": snapshot.count_edges(),
             "ready_tasks": sum(
                 1

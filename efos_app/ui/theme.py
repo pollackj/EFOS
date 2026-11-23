@@ -19,12 +19,10 @@ migrate onto one of those three stops through
 main window; the PostgreSQL schema is never touched.
 """
 from __future__ import annotations
-
 import ctypes
 import math
 import re
 import sys
-
 from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import QApplication, QWidget
 
@@ -49,11 +47,7 @@ APPEARANCE_LABELS = {value: label for label, value in APPEARANCE_OPTIONS}
 
 # Appearance names resolve to the curated stop. Stop 5 (Neutral Slate) and the
 # retired light range remain valid *palette* inputs but are no longer offered.
-THEME_PRESETS: dict[str, int] = {
-    THEME_DARK: 0,
-    THEME_GRAPHITE: 2,
-    THEME_SLATE: 4,
-}
+THEME_PRESETS: dict[str, int] = {THEME_DARK: 0, THEME_GRAPHITE: 2, THEME_SLATE: 4}
 THEME_STEPS = (0, 1, 2, 3, 4, 5)
 # Backwards-compatible alias for code that iterates the stop list.
 PRESET_VALUES = THEME_STEPS
@@ -67,13 +61,7 @@ THEME_STEP_LABELS = {
 }
 # Names persisted by builds that exposed the 0–100 slider. ``light`` migrates
 # onto Slate, the most lifted appearance choice available.
-LEGACY_THEME_NAMES = {
-    "light": 4,
-    "deep dark": 0,
-    "charcoal": 0,
-    "steel": 2,
-    "neutral slate": 4,
-}
+LEGACY_THEME_NAMES = {"light": 4, "deep dark": 0, "charcoal": 0, "steel": 2, "neutral slate": 4}
 
 # Authored end-point palettes. Every stop must define the same token set; the
 # six notched stops are expanded from these two by _build_palette_stops().
@@ -156,12 +144,7 @@ _RAW_STOPS: dict[int, dict[str, str]] = {
 
 # Foreground tokens are corrected against the interpolated backgrounds. The
 # thresholds follow WCAG: body text 7:1, secondary 5:1, muted 4:1, faint 3:1.
-_CONTRAST_FLOORS = {
-    "text": 7.0,
-    "text_soft": 5.0,
-    "muted": 4.0,
-    "faint": 3.0,
-}
+_CONTRAST_FLOORS = {"text": 7.0, "text_soft": 5.0, "muted": 4.0, "faint": 3.0}
 _CONTRAST_BACKGROUNDS = ("bg", "surface", "input")
 _RGBA_RE = re.compile(
     r"rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)"
@@ -189,6 +172,31 @@ STATE_COLORS = {
 _current_value = 0
 _cache: dict[int, dict[str, str]] = {}
 
+FONT_SCALES: dict[str, float] = {
+    "standard": 1.0,
+    "large": 1.15,
+    "xlarge": 1.30,
+}
+_FONT_SCALE: float = 1.0
+_FONT_PRESET: str = "standard"
+
+def set_font_scale(preset: str | float) -> None:
+    global _FONT_SCALE, _FONT_PRESET
+    if isinstance(preset, str):
+        key = preset.lower()
+        _FONT_PRESET = key if key in FONT_SCALES else "standard"
+        _FONT_SCALE = FONT_SCALES[_FONT_PRESET]
+    else:
+        _FONT_PRESET = "custom"
+        _FONT_SCALE = max(0.9, min(1.4, float(preset)))
+
+def fs(px: int) -> int:
+    scaled = round(px * _FONT_SCALE)
+    if _FONT_PRESET == "large" and px <= 11:
+        return max(13, scaled)
+    if _FONT_PRESET == "xlarge" and px <= 11:
+        return max(15, scaled)
+    return max(8, scaled)
 
 # ---------------------------------------------------------------------------
 # Color maths
@@ -197,58 +205,35 @@ def _parse_color(value: str) -> tuple[int, int, int, int]:
     text = str(value).strip()
     if text.startswith("#"):
         raw = text[1:]
-        if len(raw) == 3:
-            raw = "".join(channel * 2 for channel in raw)
+        if len(raw) == 3: raw = "".join(channel * 2 for channel in raw)
         if len(raw) == 8:
-            red, green, blue, alpha = (
-                int(raw[index : index + 2], 16) for index in (0, 2, 4, 6)
-            )
+            red, green, blue, alpha = (int(raw[index : index + 2], 16) for index in (0, 2, 4, 6))
             return red, green, blue, alpha
-        if len(raw) == 6:
-            return (
-                int(raw[0:2], 16),
-                int(raw[2:4], 16),
-                int(raw[4:6], 16),
-                255,
-            )
+        if len(raw) == 6: return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16), 255)
     match = _RGBA_RE.match(text)
     if match:
         red, green, blue = (int(round(float(match.group(i)))) for i in (1, 2, 3))
         raw_alpha = match.group(4)
         alpha = 255 if raw_alpha is None else int(round(float(raw_alpha) * 255))
-        return (
-            max(0, min(255, red)),
-            max(0, min(255, green)),
-            max(0, min(255, blue)),
-            max(0, min(255, alpha)),
-        )
+        return (max(0, min(255, red)), max(0, min(255, green)), max(0, min(255, blue)), max(0, min(255, alpha)))
     return 255, 255, 255, 255
 
-
-def _is_rgba(value: str) -> bool:
-    return str(value).strip().lower().startswith("rgba")
-
+def _is_rgba(value: str) -> bool: return str(value).strip().lower().startswith("rgba")
 
 def _format_color(rgb: tuple[float, float, float], alpha: float, *, rgba: bool) -> str:
     red, green, blue = (max(0, min(255, int(round(channel)))) for channel in rgb)
-    if rgba or alpha < 254.5:
-        return f"rgba({red}, {green}, {blue}, {max(0.0, min(1.0, alpha / 255.0)):.3f})"
+    if rgba or alpha < 254.5: return f"rgba({red}, {green}, {blue}, {max(0.0, min(1.0, alpha / 255.0)):.3f})"
     return f"#{red:02X}{green:02X}{blue:02X}"
-
 
 def _srgb_to_linear(channel: float) -> float:
     value = channel / 255.0
-    if value <= 0.04045:
-        return value / 12.92
+    if value <= 0.04045: return value / 12.92
     return ((value + 0.055) / 1.055) ** 2.4
-
 
 def _linear_to_srgb(value: float) -> float:
     value = max(0.0, min(1.0, value))
-    if value <= 0.0031308:
-        return value * 12.92 * 255.0
+    if value <= 0.0031308: return value * 12.92 * 255.0
     return (1.055 * (value ** (1.0 / 2.4)) - 0.055) * 255.0
-
 
 def _rgb_to_oklab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
     red, green, blue = (_srgb_to_linear(channel) for channel in rgb)
@@ -263,7 +248,6 @@ def _rgb_to_oklab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
     b_value = 0.0259040371 * l_root + 0.7827717662 * m_root - 0.8086757660 * s_root
     return lightness, a_value, b_value
 
-
 def _oklab_to_rgb(lab: tuple[float, float, float]) -> tuple[float, float, float]:
     lightness, a_value, b_value = lab
     l_root = lightness + 0.3963377774 * a_value + 0.2158037573 * b_value
@@ -277,7 +261,6 @@ def _oklab_to_rgb(lab: tuple[float, float, float]) -> tuple[float, float, float]
     blue = -0.0041960863 * l_value - 0.7034186147 * m_value + 1.7076147010 * s_value
     return _linear_to_srgb(red), _linear_to_srgb(green), _linear_to_srgb(blue)
 
-
 def _mix_colors(start: str, end: str, amount: float) -> str:
     amount = max(0.0, min(1.0, amount))
     start_rgba = _parse_color(start)
@@ -288,30 +271,20 @@ def _mix_colors(start: str, end: str, amount: float) -> str:
     )
     red, green, blue = _oklab_to_rgb(lab)  # type: ignore[arg-type]
     alpha = start_rgba[3] + (end_rgba[3] - start_rgba[3]) * amount
-    return _format_color(
-        (red, green, blue), alpha, rgba=_is_rgba(start) or _is_rgba(end)
-    )
-
+    return _format_color((red, green, blue), alpha, rgba=_is_rgba(start) or _is_rgba(end))
 
 def _relative_luminance(rgb: tuple[int, int, int]) -> float:
-    red, green, blue = (
-        _srgb_to_linear(channel) for channel in rgb[:3]
-    )
+    red, green, blue = (_srgb_to_linear(channel) for channel in rgb[:3])
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
-
 def _contrast_ratio(first: tuple[int, int, int], second: tuple[int, int, int]) -> float:
-    high, low = sorted(
-        (_relative_luminance(first), _relative_luminance(second)), reverse=True
-    )
+    high, low = sorted((_relative_luminance(first), _relative_luminance(second)), reverse=True)
     return (high + 0.05) / (low + 0.05)
-
 
 def _meets_contrast(
     rgb: tuple[int, int, int], backgrounds: list[tuple[int, int, int]], floor: float
 ) -> bool:
     return min(_contrast_ratio(rgb, background) for background in backgrounds) >= floor
-
 
 def _ensure_contrast(
     value: str,
@@ -321,8 +294,7 @@ def _ensure_contrast(
     """Nudge a foreground color toward white/black until it meets the floor."""
     source = _parse_color(value)
     rgb = source[:3]
-    if _meets_contrast(rgb, backgrounds, floor):
-        return value
+    if _meets_contrast(rgb, backgrounds, floor): return value
     white = (255, 255, 255)
     black = (0, 0, 0)
     white_score = min(_contrast_ratio(white, background) for background in backgrounds)
@@ -332,18 +304,12 @@ def _ensure_contrast(
     low, high = 0.0, 1.0
     for _ in range(18):
         amount = (low + high) / 2.0
-        candidate = tuple(
-            channel + (goal - channel) * amount for channel, goal in zip(rgb, target)
-        )
+        candidate = tuple(channel + (goal - channel) * amount for channel, goal in zip(rgb, target))
         if _meets_contrast(candidate, backgrounds, floor):  # type: ignore[arg-type]
             best = candidate
             high = amount
-        else:
-            low = amount
-    return _format_color(
-        (best[0], best[1], best[2]), source[3], rgba=_is_rgba(value)
-    )
-
+        else: low = amount
+    return _format_color((best[0], best[1], best[2]), source[3], rgba=_is_rgba(value))
 
 # ---------------------------------------------------------------------------
 # Palette stops
@@ -361,28 +327,19 @@ def _build_palette_stops() -> dict[int, dict[str, str]]:
     stops: dict[int, dict[str, str]] = {}
     for value in THEME_STEPS:
         amount = (value - THEME_STEPS[0]) / span
-        if amount <= 0:
-            result = dict(low)
-        elif amount >= 1:
-            result = dict(high)
-        else:
-            result = {key: _mix_colors(low[key], high[key], amount) for key in low}
-        backgrounds = [
-            _parse_color(result[key])[:3] for key in _CONTRAST_BACKGROUNDS
-        ]
-        for key, floor in _CONTRAST_FLOORS.items():
-            result[key] = _ensure_contrast(result[key], backgrounds, floor)
+        if amount <= 0: result = dict(low)
+        elif amount >= 1: result = dict(high)
+        else: result = {key: _mix_colors(low[key], high[key], amount) for key in low}
+        backgrounds = [_parse_color(result[key])[:3] for key in _CONTRAST_BACKGROUNDS]
+        for key, floor in _CONTRAST_FLOORS.items(): result[key] = _ensure_contrast(result[key], backgrounds, floor)
         stops[value] = result
     return stops
 
-
 PALETTES: dict[int, dict[str, str]] = _build_palette_stops()
-
 
 def _stop_palette(value: int) -> dict[str, str]:
     value = max(THEME_STEPS[0], min(THEME_STEPS[-1], int(value)))
     return dict(PALETTES[value])
-
 
 def _palette() -> dict[str, str]:
     palette = _cache.get(_current_value)
@@ -391,13 +348,10 @@ def _palette() -> dict[str, str]:
         _cache[_current_value] = palette
     return palette
 
-
 # ---------------------------------------------------------------------------
 # Public theme API
 # ---------------------------------------------------------------------------
-def current_theme_value() -> int:
-    return _current_value
-
+def current_theme_value() -> int: return _current_value
 
 def normalise_theme_value(value: int | float | str) -> int:
     """Clamp any supplied value onto the six-step ``0``–``5`` palette scale.
@@ -407,14 +361,10 @@ def normalise_theme_value(value: int | float | str) -> int:
     from the retired 0–100 slider and are rescaled by one decade first, so a
     persisted ``40`` lands on stop ``4``.
     """
-    try:
-        numeric = int(round(float(value)))
-    except (TypeError, ValueError):
-        return 0
-    if numeric > THEME_STEPS[-1]:
-        numeric = int(round(numeric / 10.0))
+    try: numeric = int(round(float(value)))
+    except (TypeError, ValueError): return 0
+    if numeric > THEME_STEPS[-1]: numeric = int(round(numeric / 10.0))
     return max(THEME_STEPS[0], min(THEME_STEPS[-1], numeric))
-
 
 def normalise_appearance_value(value: int | float | str | None) -> int:
     """Coerce any persisted appearance preference onto Dark, Graphite or Slate.
@@ -433,24 +383,17 @@ def normalise_appearance_value(value: int | float | str | None) -> int:
     """
     if isinstance(value, str):
         text = value.strip().lower()
-        if text in THEME_PRESETS:
-            return THEME_PRESETS[text]
-        if text in LEGACY_THEME_NAMES:
-            return LEGACY_THEME_NAMES[text]
-    try:
-        numeric = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return APPEARANCE_VALUES[0]
+        if text in THEME_PRESETS: return THEME_PRESETS[text]
+        if text in LEGACY_THEME_NAMES: return LEGACY_THEME_NAMES[text]
+    try: numeric = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError): return APPEARANCE_VALUES[0]
     if numeric <= THEME_STEPS[-1]:
         stop = max(THEME_STEPS[0], int(round(numeric)))
-        if stop <= 1:
-            return 0
+        if stop <= 1: return 0
         return 2 if stop <= 3 else 4
     legacy = int(round(numeric))
-    if legacy <= 10:
-        return 0
-    if legacy <= 30:
-        return 2
+    if legacy <= 10: return 0
+    if legacy <= 30: return 2
     return 4
 
 
@@ -462,37 +405,28 @@ def migrate_persisted_appearance(state: dict) -> int:
     files are rewritten once and stay migrated.
     """
     raw = state.get("theme_value")
-    if raw is None:
-        raw = state.get("theme", DEFAULT_THEME)
+    if raw is None: raw = state.get("theme", DEFAULT_THEME)
     return normalise_appearance_value(raw)
-
 
 def theme_step_label(value: int) -> str:
     """Human-readable name for a notched palette stop (``4`` → ``Slate``)."""
     return THEME_STEP_LABELS[normalise_theme_value(value)]
 
-
 def appearance_label(value: int | float | str | None) -> str:
     """Human-readable label for a curated appearance stop (``2`` → Graphite)."""
     return APPEARANCE_LABELS[normalise_appearance_value(value)]
-
 
 def theme_value_for(name: str) -> int:
     """Resolve a persisted theme name (including legacy ``light``) to a stop."""
     return normalise_appearance_value(name)
 
-
 def preset_name(value: int | float | str) -> str:
     target = normalise_appearance_value(value)
     for name, stop in THEME_PRESETS.items():
-        if stop == target:
-            return name
+        if stop == target: return name
     return THEME_DARK
 
-
-def current_theme() -> str:
-    return preset_name(_current_value)
-
+def current_theme() -> str: return preset_name(_current_value)
 
 def set_theme_value(value: int | float | str) -> int:
     """Apply a curated appearance stop (legacy values are migrated first)."""
@@ -500,26 +434,18 @@ def set_theme_value(value: int | float | str) -> int:
     _current_value = normalise_appearance_value(value)
     return _current_value
 
-
 def set_theme(name: str | int) -> int:
     """Backwards-compatible setter accepting a preset name or numeric value."""
-    if isinstance(name, int):
-        return set_theme_value(name)
+    if isinstance(name, int): return set_theme_value(name)
     return set_theme_value(theme_value_for(name))
 
-
-def is_dark() -> bool:
-    return _relative_luminance(_parse_color(c("bg"))[:3]) < 0.38
-
+def is_dark() -> bool: return _relative_luminance(_parse_color(c("bg"))[:3]) < 0.38
 
 def c(key: str) -> str:
     palette = _palette()
     return palette.get(key, PALETTES[0].get(key, "#FFFFFF"))
 
-
-def state_color(value: str) -> str:
-    return c(STATE_COLORS.get(str(value), "muted"))
-
+def state_color(value: str) -> str: return c(STATE_COLORS.get(str(value), "muted"))
 
 def rgba(key_or_color: str, alpha: float) -> str:
     """Return a Qt rgba() value from a palette key or a hex color."""
@@ -530,31 +456,28 @@ def rgba(key_or_color: str, alpha: float) -> str:
         f"{max(0.0, min(1.0, alpha)):.2f})"
     )
 
-
 def ui_font(size: int = 10, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
-    font = QFont(FONT_FAMILY, size)
+    font = QFont(FONT_FAMILY, fs(size))
     font.setWeight(weight)
     return font
-
 
 def display_font(size: int = 10, weight: QFont.Weight = QFont.Weight.DemiBold) -> QFont:
-    font = QFont(FONT_DISPLAY, size)
+    font = QFont(FONT_DISPLAY, fs(size))
     font.setWeight(weight)
     return font
-
 
 def apply_theme(
     app: QApplication,
     name: str | int | None = None,
     *,
     value: int | None = None,
+    font_scale: str | float | None = None,
 ) -> str:
-    if value is not None:
-        set_theme_value(value)
-    elif name is not None:
-        set_theme(name)
+    if value is not None: set_theme_value(value)
+    elif name is not None: set_theme(name)
+    if font_scale is not None: set_font_scale(font_scale)
     app.setStyle("Fusion")
-    app.setFont(QFont(FONT_FAMILY, 10))
+    app.setFont(QFont(FONT_FAMILY, fs(10)))
     app.setStyleSheet(build_stylesheet())
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(c("bg")))
@@ -567,9 +490,7 @@ def apply_theme(
     palette.setColor(QPalette.ColorRole.Highlight, QColor(c("accent")))
     highlight_text = (
         "#FFFFFF"
-        if _contrast_ratio(
-            _parse_color(c("accent"))[:3], (255, 255, 255)
-        )
+        if _contrast_ratio(_parse_color(c("accent"))[:3], (255, 255, 255))
         >= _contrast_ratio(_parse_color(c("accent"))[:3], (0, 0, 0))
         else "#000000"
     )
@@ -580,11 +501,9 @@ def apply_theme(
     app.setPalette(palette)
     return current_theme()
 
-
 def enable_native_title_bar(widget: QWidget) -> None:
     """Ask Windows 10/11 to render the native frame to match the active theme."""
-    if sys.platform != "win32":
-        return
+    if sys.platform != "win32": return
     try:
         hwnd = int(widget.winId())
         dark = 1 if is_dark() else 0
@@ -601,16 +520,11 @@ def enable_native_title_bar(widget: QWidget) -> None:
                 ctypes.sizeof(ctypes.c_int),
             )
         corner = ctypes.c_int(2)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 33, ctypes.byref(corner), ctypes.sizeof(corner)
-        )
-    except Exception:
-        return
-
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner), ctypes.sizeof(corner))
+    except Exception: return
 
 # Backwards-compatible alias used by dialogs.
 enable_dark_title_bar = enable_native_title_bar
-
 
 def build_stylesheet() -> str:
     t = {key: c(key) for key in PALETTES[0]}
@@ -620,7 +534,7 @@ QWidget {{
     color: {t['text']};
     background: transparent;
     font-family: "{FONT_FAMILY}", "Segoe UI", sans-serif;
-    font-size: 13px;
+    font-size: {fs(13)}px;
     selection-background-color: {t['accent']};
     selection-color: {t['bg']};
 }}
@@ -707,7 +621,7 @@ QPushButton {{
     border: 1px solid {t['border']};
     border-radius: 8px;
     padding: 7px 13px;
-    font-size: 12px;
+    font-size: {fs(12)}px;
     font-weight: 500;
 }}
 QPushButton:hover {{ background: {t['hover']}; border-color: {t['border_hi']}; color: {t['text']}; }}
@@ -735,14 +649,14 @@ QPushButton[nav="true"] {{
     border: 1px solid transparent;
     border-radius: 9px;
     color: {t['muted']};
-    font-size: 12px;
+    font-size: {fs(12)}px;
     font-weight: 550;
 }}
 QPushButton[nav="true"]:hover {{ background: {t['surface_2']}; color: {t['text_soft']}; }}
 QPushButton[nav="true"]:checked {{ background: {t['selection']}; color: {t['text']}; border: 1px solid {t['border_hi']}; }}
-QPushButton[chip="true"] {{ border-radius: 13px; padding: 5px 11px; font-size: 11px; background: {t['surface_2']}; border: 1px solid {t['border']}; color: {t['muted']}; }}
+QPushButton[chip="true"] {{ border-radius: 13px; padding: 5px 11px; font-size: {fs(11)}px; background: {t['surface_2']}; border: 1px solid {t['border']}; color: {t['muted']}; }}
 QPushButton[chip="true"]:checked {{ color: {t['text']}; background: {t['selection']}; border-color: {t['border_hi']}; }}
-QPushButton[stateAction="true"] {{ text-align: left; padding: 8px 11px; font-size: 12px; }}
+QPushButton[stateAction="true"] {{ text-align: left; padding: 8px 11px; font-size: {fs(12)}px; }}
 QPushButton[stateAction="true"][danger="true"] {{ color: {t['red']}; }}
 QPushButton[windowControl="true"] {{ background: transparent; border: 1px solid transparent; border-radius: 6px; color: {t['muted']}; padding: 0; font-family: "Segoe UI Symbol", "Segoe UI"; font-size: 12px; }}
 QPushButton[windowControl="true"]:hover {{ background: {t['surface_3']}; color: {t['text']}; border-color: {t['border']}; }}
@@ -764,26 +678,26 @@ QLineEdit[invalid="true"] {{ border-color: {t['red']}; }}
 QComboBox {{ padding-right: 26px; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
 QComboBox QAbstractItemView {{ background: {t['surface']}; border: 1px solid {t['border_hi']}; border-radius: 8px; color: {t['text']}; selection-background-color: {t['selection']}; padding: 4px; outline: 0; }}
-QComboBox QAbstractItemView::item {{ min-height: 26px; padding: 3px 8px; }}
+QComboBox QAbstractItemView::item {{ min-height: {fs(26)}px; padding: 3px 8px; }}
 QDateTimeEdit::drop-down, QTimeEdit::drop-down {{ border: none; width: 22px; }}
-QCheckBox {{ color: {t['text_soft']}; spacing: 8px; font-size: 12px; }}
+QCheckBox {{ color: {t['text_soft']}; spacing: 8px; font-size: {fs(12)}px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; border: 1px solid {t['border_hi']}; background: {t['input']}; }}
 QCheckBox::indicator:hover {{ border-color: {t['green']}; }}
 QCheckBox::indicator:checked {{ background: {t['green']}; border-color: {t['green']}; }}
 
 QLabel {{ background: transparent; }}
-QLabel[role="h1"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: 27px; font-weight: 650; color: {t['text']}; }}
-QLabel[role="h2"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: 17px; font-weight: 600; color: {t['text']}; }}
-QLabel[role="h3"] {{ font-size: 13px; font-weight: 600; color: {t['text']}; }}
-QLabel[role="eyebrow"] {{ font-size: 10px; font-weight: 700; color: {t['faint']}; letter-spacing: 2px; }}
-QLabel[role="muted"] {{ color: {t['muted']}; font-size: 12px; }}
-QLabel[role="faint"] {{ color: {t['faint']}; font-size: 11px; }}
-QLabel[role="metric"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: 31px; font-weight: 650; color: {t['text']}; }}
-QLabel[role="mono"] {{ font-family: "Cascadia Mono", "Consolas", monospace; font-size: 11px; color: {t['muted']}; }}
-QLabel[role="danger"] {{ color: {t['red']}; font-size: 12px; }}
-QLabel[role="success"] {{ color: {t['green']}; font-size: 12px; }}
-QLabel[role="sectionTitle"] {{ font-size: 11px; font-weight: 700; color: {t['muted']}; letter-spacing: 1px; }}
-QLabel[badge="true"] {{ border-radius: 9px; padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }}
+QLabel[role="h1"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: {fs(27)}px; font-weight: 650; color: {t['text']}; }}
+QLabel[role="h2"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: {fs(17)}px; font-weight: 600; color: {t['text']}; }}
+QLabel[role="h3"] {{ font-size: {fs(13)}px; font-weight: 600; color: {t['text']}; }}
+QLabel[role="eyebrow"] {{ font-size: {fs(10)}px; font-weight: 700; color: {t['faint']}; letter-spacing: 2px; }}
+QLabel[role="muted"] {{ color: {t['muted']}; font-size: {fs(12)}px; }}
+QLabel[role="faint"] {{ color: {t['faint']}; font-size: {fs(11)}px; }}
+QLabel[role="metric"] {{ font-family: "{FONT_DISPLAY}", "Segoe UI"; font-size: {fs(31)}px; font-weight: 650; color: {t['text']}; }}
+QLabel[role="mono"] {{ font-family: "Cascadia Mono", "Consolas", monospace; font-size: {fs(11)}px; color: {t['muted']}; }}
+QLabel[role="danger"] {{ color: {t['red']}; font-size: {fs(12)}px; }}
+QLabel[role="success"] {{ color: {t['green']}; font-size: {fs(12)}px; }}
+QLabel[role="sectionTitle"] {{ font-size: {fs(11)}px; font-weight: 700; color: {t['muted']}; letter-spacing: 1px; }}
+QLabel[badge="true"] {{ border-radius: 9px; padding: 3px 8px; font-size: {fs(10)}px; font-weight: 700; letter-spacing: 0.3px; }}
 QLabel[tone="ready"], QLabel[tone="resolved"], QLabel[tone="true"] {{ color: {t['green']}; background: {rgba('green', 0.11)}; border: 1px solid {rgba('green', 0.24)}; }}
 QLabel[tone="blocked"], QLabel[tone="shelved"], QLabel[tone="unknown"] {{ color: {t['muted']}; background: {rgba('muted', 0.09)}; border: 1px solid {rgba('muted', 0.18)}; }}
 QLabel[tone="completed"] {{ color: {t['blue']}; background: {rgba('blue', 0.11)}; border: 1px solid {rgba('blue', 0.24)}; }}
@@ -822,14 +736,14 @@ QHeaderView::section {{
     border: none;
     border-bottom: 1px solid {t['border']};
     padding: 9px 10px;
-    font-size: 10px;
+    font-size: {fs(10)}px;
     font-weight: 700;
     letter-spacing: 0.8px;
 }}
 QHeaderView::section:hover {{ background: {t['hover']}; color: {t['text']}; }}
 QTableCornerButton::section {{ background: {t['surface_2']}; border: none; }}
 
-QToolTip {{ background: {t['surface']}; color: {t['text']}; border: 1px solid {t['border_hi']}; border-radius: 7px; padding: 5px 8px; font-size: 11px; }}
+QToolTip {{ background: {t['surface']}; color: {t['text']}; border: 1px solid {t['border_hi']}; border-radius: 7px; padding: 5px 8px; font-size: {fs(11)}px; }}
 QMenu {{ background: {t['surface']}; border: 1px solid {t['border_hi']}; border-radius: 10px; padding: 5px; }}
 QMenu::item {{ padding: 7px 26px 7px 12px; border-radius: 6px; color: {t['text_soft']}; }}
 QMenu::item:selected {{ background: {t['selection']}; color: {t['text']}; }}

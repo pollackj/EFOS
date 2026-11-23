@@ -13,18 +13,32 @@ is required at runtime.
 
 - **Native desktop shell** — frameless PyQt6 window with a thin theme-aware outer
   outline, dark first-run default, a Dark / Graphite / Slate appearance choice
-  drawn from the six-stop dark-to-slate palette, and locally persisted settings.
+  drawn from the six-stop dark-to-slate palette, Default / Large / Extra Large
+  text-size presets that scale every panel, table, badge, and canvas label, and
+  locally persisted settings.
 - **Suggested Focus** — a four-tier recommendation cascade over live database
   state: Ready Task, critical milestone, stalled Project, revisit candidate.
   Clicking it opens the shared metadata inspector without changing any data.
 - **Flat dependency canvas** — only Tasks, Projects, and external Conditions.
   Condition → entity is a Precondition; entity → entity is a Prerequisite.
-- **Manage + Flow dashboard** — metadata editing, recurrence, schedules,
-  temporal availability, dependency attachment, deferral, shelving, and the
-  canvas in one workspace.
-- **Sortable Registry** — All/Tasks/Projects/Conditions filters, typed
-  column sorting, `+N more`-style autocomplete search, and completed/deferred
-  history.
+- **Manage + Flow dashboard** — one workspace with two views titled
+  **Active Workspace** (Manage) and **Dependency Canvas** (Flow). The compact
+  toolbar is pinned to the left workspace column, so its segmented control and
+  action buttons line up with the Tasks card and Flow canvas frame while the
+  centred view title stays clear of the Inspector. The canvas tools stay pinned
+  to that column's right edge on Flow; the three create actions collapse when the
+  column is too narrow to keep the title uncrowded. Manage carries metadata
+  editing, recurrence, schedules, temporal availability, dependency attachment,
+  deferral, and shelving; Flow carries the canvas plus its Auto layout, Fit,
+  Zoom out, and Zoom in tools.
+- **Shared Inspector** — the right-hand pane is a draggable 300–420 px surface
+  (Settings presets: 300 / 360 / 420 px) reused by Manage, Flow, Registry, and
+  the Assistant. Its notes save on focus blur.
+- **Sortable Registry** — All/Tasks/Projects/Conditions filters, typed column
+  sorting, autocomplete search, and completed/deferred history. Tasks open
+  sorted by operational Status priority — **Blocked → Ready → Completed →
+  Deferred** — alphabetized by task name inside each status; clicking any header
+  re-sorts and toggles its direction.
 - **Assistant launchpad** — permanent right-hand panel with four default
   queries, custom label/prompt presets, context envelope, two-pass diagnostics,
   and up to 256 FIFO conversation threads.
@@ -53,15 +67,20 @@ EFOS_GOOGLE_CALENDAR_ID=primary
 
 Optional connection overrides are `EFOS_DB_HOST`, `EFOS_DB_PORT`,
 `EFOS_DB_USER`, and `EFOS_DB_NAME`. A `.env` is discovered from
-`EFOS_ENV_FILE`, the executable folder and its parents, the working directory,
-and `%APPDATA%\EFOS`.
+`EFOS_ENV_FILE`, the source tree or executable folder and their parents, the
+working directory, `%APPDATA%\EFOS`, and `~/.efos`.
 
 ### 2. First launch
 
 ```powershell
-python -m pip install -r requirements.txt
-python main.py
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
 ```
+
+All development, test, and packaging steps use the project virtual environment's
+interpreter; `build.ps1` resolves `.venv\Scripts\python.exe` automatically and
+falls back to `python` only when the environment is absent.
 
 If the target database or schema does not exist, the guided setup wizard asks
 for:
@@ -84,14 +103,14 @@ rules, notes, events, and calendar cache rows are preserved. If the runtime role
 cannot execute DDL, EFOS tries the configured administrative credentials; if
 neither role may migrate, startup stops with the exact missing-object report.
 Starting from an empty database still executes the canonical schema verbatim.
-To apply the migration without opening the UI, run `python main.py --self-test`;
-it starts the service, performs the additive migration, validates the schema,
-and writes `efos_selftest.json`.
+To apply the migration without opening the UI, run
+`.\.venv\Scripts\python.exe main.py --self-test`; it starts the service, performs
+the additive migration, validates the schema, and writes `efos_selftest.json`.
 
 ### 3. Build the Windows executable
 
 ```powershell
-python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
@@ -127,14 +146,16 @@ main.py
    ├─ workers.py          QThread workers for network/probe calls
    ├─ sql/schema.sql      canonical schema executed on first launch
    └─ ui/
-      ├─ theme.py         six-stop dark/slate palettes, QSS, native chrome
-      ├─ graph.py         flat dependency canvas
+      ├─ theme.py         six-stop dark/slate palettes, fs() scaling, QSS
+      ├─ widgets.py       shared cards, badges, splitters, brand header, toast
+      ├─ graph.py         flat dependency canvas + zoom/centre snapshots
       ├─ flow_page.py     canvas workspace
       ├─ inspector.py     shared metadata inspector and gesture guide
-      ├─ dashboard.py     Overview + Manage/Flow dashboard
-      ├─ registry_page.py sortable registry + autocomplete
+      ├─ dashboard.py     Overview + Manage/Flow dashboard and pinned toolbar
+      ├─ registry_page.py sortable registry + operational Status ordering
       ├─ chat_page.py     assistant stream + permanent launchpad
       ├─ calendar_page.py Day/Week/Month/Schedule views
+      ├─ settings_dialog.py local appearance/width/text-size preferences
       └─ main_window.py   shell, sidebar, Suggested Focus, status bar
 ```
 
@@ -264,32 +285,42 @@ completed.
 
 - **Overview** — execution posture, Ready Tasks, schedule, Projects, and
   dependency health.
-- **Dashboard → Manage** — create, rename, inspect, schedule, configure
-  availability, attach dependencies, defer/reopen, shelve/unshelve, toggle
-  Conditions, and write notes.
-- **Dashboard → Flow** — drag from a node's right-hand port. Wheel zooms;
-  middle-drag pans; double-click an edge or press Delete to remove a dependency.
-  The inspector includes the current canvas gesture guide.
+- **Dashboard → Manage** — the toolbar title reads **Active Workspace**. Create,
+  rename, inspect, schedule, configure availability, attach dependencies,
+  defer/reopen, shelve/unshelve, toggle Conditions, and write notes. The
+  Inspector width is draggable between 300 and 420 px.
+- **Dashboard → Flow** — the toolbar title reads **Dependency Canvas**. Drag from
+  a node's right-hand port. Wheel zooms; middle-drag pans; double-click an edge
+  or press Delete to remove a dependency. The inspector includes the current
+  canvas gesture guide. Switching appearance or text size rebuilds the interface
+  but keeps the current zoom level and scroll/centre position.
 - **Registry** — filter by object type, type to see autocomplete suggestions,
-  click column headers to sort, and reopen completed/deferred tasks. The Status
-  column always shows the Task's formal state; availability, schedule, and
-  recurrence appear in the row tooltip. Double-click or use the context menu to
-  open the shared inspector.
+  click column headers to sort, and reopen completed/deferred tasks. The Tasks
+  view opens on the operational Status order **Blocked → Ready → Completed →
+  Deferred**, alphabetized inside each status. The Status column always shows
+  the Task's formal state; availability, schedule, and recurrence appear in the
+  row tooltip. Double-click or use the context menu to open the shared inspector.
 - **Assistant** — use a default or custom launchpad query. The right panel shows
   the context envelope and the two-pass routing trace.
 - **Calendar** — switch among Day, Week, Month, and Schedule. Double-click a
   local task to open its metadata inspector; external events are read-only.
   Calendar blocks are scheduling data, not temporal availability.
+- **Settings** — the sidebar gear (or `Ctrl+,`) opens local preferences only:
+  three appearance choices (Dark / Graphite / Slate), the Inspector width presets
+  (300 / 360 / 420 px), text size (Default / Large / Extra Large), the default
+  landing view, and Flow startup auto-layout. Everything is stored in
+  `ui_state.json`; the PostgreSQL schema is never touched.
 
 Keyboard shortcuts: `Ctrl+1…5` pages, `Ctrl+N` new task, `Ctrl+R` recompute,
-`Ctrl+K` assistant. `Enter` sends; `Shift+Enter` inserts a newline.
+`Ctrl+K` assistant, `Ctrl+,` settings. `Enter` sends; `Shift+Enter` inserts a
+newline.
 
 ## Tests
 
 ```powershell
 $env:QT_QPA_PLATFORM="offscreen"
 $env:QT_QPA_FONTDIR="C:\Windows\Fonts"
-python -m pytest -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
 ```
 
 The suite creates and drops disposable PostgreSQL databases (`efos_test_*`,
@@ -316,6 +347,14 @@ The suite creates and drops disposable PostgreSQL databases (`efos_test_*`,
   appearance and 300/360/420 px Inspector-width presets, unified two-pane page
   geometry, assistant bottom-scroll, calendar time-grid padding, and Google
   OAuth failure/timeout recovery
+- the Default / Large / Extra Large text-size presets, their persistence, and
+  the `fs()` 8 px floor (13 px for Large, 15 px for Extra Large small labels)
+- the Registry's default operational Status order
+  (Blocked → Ready → Completed → Deferred) and its column-click direction toggles
+- the centred Active Workspace / Dependency Canvas Dashboard titles and the
+  toolbar's alignment with the left workspace column
+- Flow zoom, scroll/centre position, tab, and toolbar visibility surviving
+  `_rebuild_interface()` (appearance and text-size changes)
 
 ## Security
 

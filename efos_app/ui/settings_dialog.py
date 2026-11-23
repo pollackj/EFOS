@@ -25,51 +25,33 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .theme import (
-    APPEARANCE_OPTIONS,
-    normalise_appearance_value,
-)
+from .theme import (APPEARANCE_OPTIONS, fs, normalise_appearance_value)
 from .widgets import Divider, GreenCheckBox, SectionLabel
 
-LANDING_VIEWS = (
-    "Overview",
-    "Dashboard",
-    "Flow",
-    "Projects",
-    "Tasks",
-    "Calendar",
-    "Assistant",
-)
+LANDING_VIEWS = ("Overview", "Dashboard", "Flow", "Projects", "Tasks", "Calendar", "Assistant")
 
 # The Inspector stays interactively draggable between these bounds on every
 # workspace page; Settings offers the three named stops only.
 INSPECTOR_WIDTH_PRESETS = (300, 360, 420)
 MIN_INSPECTOR_WIDTH = INSPECTOR_WIDTH_PRESETS[0]
 MAX_INSPECTOR_WIDTH = INSPECTOR_WIDTH_PRESETS[-1]
-INSPECTOR_WIDTH_OPTIONS = tuple(
-    (f"{width} px", width) for width in INSPECTOR_WIDTH_PRESETS
-)
+INSPECTOR_WIDTH_OPTIONS = tuple((f"{width} px", width) for width in INSPECTOR_WIDTH_PRESETS)
 
+FONT_SIZE_OPTIONS: tuple[tuple[str, int], ...] = (("Default", 0), ("Large", 1), ("Extra Large", 2))
+FONT_SCALE_TO_CODE = {"standard": 0, "large": 1, "xlarge": 2}
+CODE_TO_FONT_SCALE = {0: "standard", 1: "large", 2: "xlarge"}
 
 def nearest_inspector_width(value) -> int:  # type: ignore[no-untyped-def]
     """Snap any live Inspector width onto the closest Settings preset."""
-    try:
-        width = int(round(float(value)))
-    except (TypeError, ValueError):
-        width = 360
+    try: width = int(round(float(value)))
+    except (TypeError, ValueError): width = 360
     width = max(MIN_INSPECTOR_WIDTH, min(MAX_INSPECTOR_WIDTH, width))
-    return min(
-        INSPECTOR_WIDTH_PRESETS,
-        key=lambda preset: (abs(preset - width), preset),
-    )
-
+    return min(INSPECTOR_WIDTH_PRESETS, key=lambda preset: (abs(preset - width), preset))
 
 class _OptionColumn(QWidget):
     """Centred green square above a centred label; the whole column toggles."""
 
-    def __init__(
-        self, box: GreenCheckBox, label: QLabel, parent: QWidget | None = None
-    ):
+    def __init__(self, box: GreenCheckBox, label: QLabel, parent: QWidget | None = None):
         super().__init__(parent)
         self._box = box
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -92,6 +74,7 @@ class SettingsDialog(QDialog):
     """Modal settings surface opened from the sidebar gear."""
 
     theme_value_changed = pyqtSignal(int)
+    font_scale_changed = pyqtSignal(str)
     landing_view_changed = pyqtSignal(str)
     flow_auto_layout_changed = pyqtSignal(bool)
     inspector_width_changed = pyqtSignal(int)
@@ -100,6 +83,7 @@ class SettingsDialog(QDialog):
         self,
         *,
         theme_value: int,
+        font_scale: str = "standard",
         landing_view: str,
         flow_auto_layout: bool,
         inspector_width: int,
@@ -110,20 +94,22 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         # A fixed floor keeps all three option columns fully visible on
         # platforms whose dialog size hint is not propagated immediately.
-        self.setMinimumSize(560, 620)
+        self.setMinimumSize(560, 710)
         self.setMaximumWidth(720)
         self._appearance_value = normalise_appearance_value(theme_value)
         self._emitted_theme = self._appearance_value
         self._width_value = nearest_inspector_width(inspector_width)
         self._saved_width = self._width_value
         self._width_committed = False
+        self._font_code = FONT_SCALE_TO_CODE.get(str(font_scale).lower(), 0)
+        self._emitted_font_code = self._font_code
+
         self._landing_view = str(landing_view)
         self._flow_auto_layout = bool(flow_auto_layout)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(14)
-
         heading = QLabel("Settings")
         heading.setProperty("role", "h2")
         root.addWidget(heading)
@@ -135,7 +121,6 @@ class SettingsDialog(QDialog):
         subtitle.setWordWrap(True)
         subtitle.setMinimumWidth(0)
         root.addWidget(subtitle)
-
         root.addWidget(self._appearance_card())
         root.addWidget(self._behaviour_card())
 
@@ -175,7 +160,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         label = QLabel(label_text)
-        label.setStyleSheet("font-size: 12px;")
+        label.setStyleSheet(f"font-size: {fs(12)}px;")
         label.setMinimumWidth(150)
         layout.addWidget(label, 0)
         layout.addWidget(widget, 1)
@@ -190,9 +175,7 @@ class SettingsDialog(QDialog):
         box.setToolTip(label_text)
         label = QLabel(label_text)
         label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        label.setStyleSheet(
-            "font-size: 12px; font-weight: 600; letter-spacing: 0.2px;"
-        )
+        label.setStyleSheet(f"font-size: {fs(12)}px; font-weight: 600; letter-spacing: 0.2px;")
         return _OptionColumn(box, label), box
 
     def _choice_group(
@@ -215,9 +198,7 @@ class SettingsDialog(QDialog):
         for column, (label_text, value) in enumerate(options):
             widget, box = self._option_column(label_text)
             box.setChecked(value == current)
-            box.toggled.connect(
-                lambda checked, v=value: on_selected(v, bool(checked))
-            )
+            box.toggled.connect(lambda checked, v=value: on_selected(v, bool(checked)))
             grid.addWidget(widget, 0, column)
             grid.setColumnStretch(column, 1)
             boxes[value] = box
@@ -260,6 +241,23 @@ class SettingsDialog(QDialog):
         width_hint.setWordWrap(True)
         width_hint.setMinimumWidth(0)
         layout.addWidget(width_hint)
+        layout.addWidget(Divider())
+        layout.addWidget(SectionLabel("Text size"))
+        self.font_choices, self.font_boxes = self._choice_group(
+            FONT_SIZE_OPTIONS,
+            self._font_code,
+            self._on_font_selected,
+        )
+        layout.addWidget(self.font_choices)
+        font_hint = QLabel(
+            "Increases interface text across panels, badges, and tables without "
+            "changing Windows display scaling."
+        )
+        font_hint.setProperty("role", "faint")
+        font_hint.setWordWrap(True)
+        font_hint.setMinimumWidth(0)
+        layout.addWidget(font_hint)
+
         return card
 
     def _behaviour_card(self) -> QFrame:
@@ -268,13 +266,9 @@ class SettingsDialog(QDialog):
 
         self.landing_combo = QComboBox()
         self.landing_combo.addItems(LANDING_VIEWS)
-        self.landing_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        if self.landing_combo.findText(self._landing_view) < 0:
-            self.landing_combo.setCurrentIndex(0)
-        else:
-            self.landing_combo.setCurrentText(self._landing_view)
+        self.landing_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        if self.landing_combo.findText(self._landing_view) < 0: self.landing_combo.setCurrentIndex(0)
+        else: self.landing_combo.setCurrentText(self._landing_view)
         self.landing_combo.currentTextChanged.connect(self._on_landing_view)
         layout.addWidget(self._row("Default landing view", self.landing_combo))
 
@@ -305,8 +299,7 @@ class SettingsDialog(QDialog):
         self._width_committed = False
         self._sync_controls()
         self.landing_combo.blockSignals(True)
-        if self.landing_combo.findText(landing_view) >= 0:
-            self.landing_combo.setCurrentText(landing_view)
+        if self.landing_combo.findText(landing_view) >= 0: self.landing_combo.setCurrentText(landing_view)
         self.landing_combo.blockSignals(False)
         self._flow_auto_layout = bool(flow_auto_layout)
         self.flow_check.blockSignals(True)
@@ -330,21 +323,28 @@ class SettingsDialog(QDialog):
             box.blockSignals(True)
             box.setChecked(value == self._width_value)
             box.blockSignals(False)
+        for value, box in self.font_boxes.items():
+            box.blockSignals(True)
+            box.setChecked(value == self._font_code)
+            box.blockSignals(False)
+
+    def _on_font_selected(self, value: int, checked: bool) -> None:
+        if not self._select_exclusive(self.font_boxes, value, checked): return
+        self._font_code = value
+        if self._font_code != self._emitted_font_code:
+            self._emitted_font_code = self._font_code
+            self.font_scale_changed.emit(CODE_TO_FONT_SCALE[self._font_code])
 
     # ----------------------------------------------------------------- state
     @property
-    def appearance_value(self) -> int:
-        return self._appearance_value
+    def appearance_value(self) -> int: return self._appearance_value
 
     @property
-    def width_value(self) -> int:
-        return self._width_value
+    def width_value(self) -> int: return self._width_value
 
     # --------------------------------------------------------------- events
     @staticmethod
-    def _select_exclusive(
-        boxes: dict[int, GreenCheckBox], value: int, checked: bool
-    ) -> bool:
+    def _select_exclusive(boxes: dict[int, GreenCheckBox], value: int, checked: bool) -> bool:
         """Keep exactly one box checked inside a group.
 
         Clicking an already-checked box would otherwise uncheck it and leave the
@@ -366,46 +366,38 @@ class SettingsDialog(QDialog):
         return True
 
     def _on_appearance_selected(self, value: int, checked: bool) -> None:
-        if not self._select_exclusive(self.appearance_boxes, value, checked):
-            return
+        if not self._select_exclusive(self.appearance_boxes, value, checked): return
         self._appearance_value = normalise_appearance_value(value)
         self._theme_timer.start()
 
     def _on_width_selected(self, value: int, checked: bool) -> None:
-        if not self._select_exclusive(self.width_boxes, value, checked):
-            return
+        if not self._select_exclusive(self.width_boxes, value, checked): return
         self._width_value = nearest_inspector_width(value)
 
     def _flush_theme(self) -> None:
         self._theme_timer.stop()
         value = self._appearance_value
-        if value == self._emitted_theme:
-            return
+        if value == self._emitted_theme: return
         self._emitted_theme = value
         self.theme_value_changed.emit(value)
 
     def _commit_width(self) -> None:
         """Apply the chosen preset width once, when the dialog is saved."""
-        if self._width_committed:
-            return
+        if self._width_committed: return
         self._width_committed = True
         self._saved_width = nearest_inspector_width(self._width_value)
         self.inspector_width_changed.emit(self._saved_width)
 
     def _on_landing_view(self, value: str) -> None:
-        if value:
-            self.landing_view_changed.emit(value)
+        if value: self.landing_view_changed.emit(value)
 
-    def _on_flow_auto_layout(self, checked: bool) -> None:
-        self.flow_auto_layout_changed.emit(bool(checked))
+    def _on_flow_auto_layout(self, checked: bool) -> None: self.flow_auto_layout_changed.emit(bool(checked))
 
-    def _close(self) -> None:
-        self.accept()
+    def _close(self) -> None: self.accept()
 
     def done(self, result: int) -> None:  # noqa: N802 - Qt override
         if result == QDialog.DialogCode.Accepted:
             self._flush_theme()
             self._commit_width()
-        else:
-            self._theme_timer.stop()
+        else: self._theme_timer.stop()
         super().done(result)

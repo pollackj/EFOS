@@ -98,8 +98,7 @@ class RagPipeline:
         history: Iterable[dict[str, str]] | None = None,
     ) -> ChatAnswer:
         question = (question or "").strip()
-        if not question:
-            raise ValueError("Ask a question first.")
+        if not question: raise ValueError("Ask a question first.")
         started = time.perf_counter()
         if is_priority_request(question):
             items, narrative = self.service.priority_items(view)
@@ -161,8 +160,7 @@ class RagPipeline:
         content = self._complete(messages, temperature=0.0, max_tokens=60, json_mode=True)
         payload = _extract_json(content)
         intent = str(payload.get("intent", "")).upper()
-        if intent in ("QUERY", "CHAT"):
-            return intent, "model route"
+        if intent in ("QUERY", "CHAT"): return intent, "model route"
         heuristic = "QUERY" if _heuristic_query(question) else "CHAT"
         return heuristic, "local fallback route"
 
@@ -181,8 +179,7 @@ class RagPipeline:
         payload = _extract_json(content)
         sql = str(payload.get("sql", "")).strip()
         title = str(payload.get("title", "") or "Query result").strip()[:80]
-        if not sql:
-            return "", title
+        if not sql: return "", title
         from .db import validate_readonly_sql
 
         safe_sql = validate_readonly_sql(sql)
@@ -219,8 +216,7 @@ class RagPipeline:
             "max_tokens": max_tokens,
             "stream": False,
         }
-        if json_mode:
-            payload["response_format"] = {"type": "json_object"}
+        if json_mode: payload["response_format"] = {"type": "json_object"}
         try:
             response = requests.post(
                 url,
@@ -238,8 +234,7 @@ class RagPipeline:
             try:
                 error = response.json().get("error", {})
                 detail = str(error.get("message", ""))[:220]
-            except (ValueError, AttributeError):
-                pass
+            except (ValueError, AttributeError): pass
             suffix = f" {detail}" if detail else ""
             raise ExternalServiceError(f"DeepSeek returned HTTP {response.status_code}.{suffix}")
         try:
@@ -252,14 +247,12 @@ class RagPipeline:
         return content.strip()
 
 def _recent_history(history: Iterable[dict[str, str]] | None) -> list[dict[str, str]]:
-    if not history:
-        return []
+    if not history: return []
     cleaned: list[dict[str, str]] = []
     for message in list(history)[-6:]:
         role = message.get("role")
         content = (message.get("content") or "").strip()
-        if role in ("user", "assistant") and content:
-            cleaned.append({"role": role, "content": content[:1600]})
+        if role in ("user", "assistant") and content: cleaned.append({"role": role, "content": content[:1600]})
     return cleaned
 
 def _history_text(history: list[dict[str, str]]) -> str:
@@ -269,57 +262,42 @@ def _with_history(question: str, history: list[dict[str, str]]) -> str:
     prior = _history_text(history)
     return f"PRIOR MESSAGES:\n{prior or '(none)'}\n\nLATEST MESSAGE:\n{question}"
 
-def _heuristic_query(question: str) -> bool:
-    return bool(_HEURISTIC_QUERY.search(question))
+def _heuristic_query(question: str) -> bool: return bool(_HEURISTIC_QUERY.search(question))
 
 def _extract_json(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        value = json.loads(cleaned)
+    try: value = json.loads(cleaned)
     except json.JSONDecodeError:
         start = cleaned.find("{")
         end = cleaned.rfind("}")
-        if start == -1 or end <= start:
-            raise ExternalServiceError("The model returned no JSON object.")
-        try:
-            value = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise ExternalServiceError("The model returned malformed JSON.") from exc
-    if not isinstance(value, dict):
-        raise ExternalServiceError("The model returned a non-object JSON value.")
+        if start == -1 or end <= start: raise ExternalServiceError("The model returned no JSON object.")
+        try: value = json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError as exc: raise ExternalServiceError("The model returned malformed JSON.") from exc
+    if not isinstance(value, dict): raise ExternalServiceError("The model returned a non-object JSON value.")
     return value
 
 def _display_value(value: Any) -> Any:
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat(sep=" ", timespec="seconds")
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return format(value, "f")
-    if isinstance(value, dt_time):
-        return value.isoformat(timespec="seconds")
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, default=str, ensure_ascii=False)
+    if isinstance(value, UUID): return str(value)
+    if isinstance(value, datetime): return value.isoformat(sep=" ", timespec="seconds")
+    if isinstance(value, date): return value.isoformat()
+    if isinstance(value, Decimal): return format(value, "f")
+    if isinstance(value, dt_time): return value.isoformat(timespec="seconds")
+    if isinstance(value, (dict, list)): return json.dumps(value, default=str, ensure_ascii=False)
     return value
 
 def _fmt_ts(raw: Any) -> str:
-    if not raw:
-        return ""
+    if not raw: return ""
     try:
         dt = datetime.fromisoformat(str(raw))
         return dt.strftime("%a %b %d, %H:%M")
-    except ValueError:
-        return str(raw)
+    except ValueError: return str(raw)
 
 def _summarize_result(title: str, columns: list[str], rows: list[dict[str, Any]]) -> str:
     header = f"{title} ({len(rows)})" if title else f"Results ({len(rows)})"
-    if not rows:
-        return f"{title}: No matching records found." if title else "No matching records found."
+    if not rows: return f"{title}: No matching records found." if title else "No matching records found."
     if len(rows) == 1 and len(columns) == 1:
         prefix = f"{title}: " if title else ""
         value = rows[0].get(columns[0])
@@ -334,8 +312,7 @@ def _summarize_result(title: str, columns: list[str], rows: list[dict[str, Any]]
         end = _fmt_ts(row.get("scheduled_end"))
 
         headline = f"• {name}" if name else "• Record"
-        if state:
-            headline += f"  [{str(state).upper()}]"
+        if state: headline += f"  [{str(state).upper()}]"
         lines.append(headline)
 
         details: list[str] = []
@@ -343,8 +320,7 @@ def _summarize_result(title: str, columns: list[str], rows: list[dict[str, Any]]
             same_day = start[:10] == end[:10]
             end_part = end[12:] if same_day else end
             details.append(f"Window: {start} – {end_part}")
-        elif start:
-            details.append(f"Starts: {start}")
+        elif start: details.append(f"Starts: {start}")
 
         handled = {
             "id", "name", "display_name", "title", "current_state",
@@ -352,19 +328,15 @@ def _summarize_result(title: str, columns: list[str], rows: list[dict[str, Any]]
             "created_at", "updated_at",
         }
         for col in columns:
-            if col in handled:
-                continue
+            if col in handled: continue
             val = row.get(col)
-            if val is None or val == "":
-                continue
+            if val is None or val == "": continue
             label = col.replace("_", " ").capitalize()
             details.append(f"{label}: {val}")
 
-        if details:
-            lines.append(f"    {' · '.join(details)}")
+        if details: lines.append(f"    {' · '.join(details)}")
 
-    if len(rows) > 50:
-        lines.append(f"\n… and {len(rows) - 50} more.")
+    if len(rows) > 50: lines.append(f"\n… and {len(rows) - 50} more.")
     return "\n".join(lines)
 
 def _tone_filter(text: str) -> str:
@@ -372,8 +344,7 @@ def _tone_filter(text: str) -> str:
     for raw in text.replace("\r\n", "\n").split("\n"):
         line = raw.rstrip()
         stripped = line.strip()
-        if re.fullmatch(r"\([^)]*\)", stripped):
-            continue
+        if re.fullmatch(r"\([^)]*\)", stripped): continue
         line = re.sub(
             r"^\s*(Certainly|Of course|Sure thing|I understand|It sounds like|"
             r"I can see that)[,.!—\-\s]*",

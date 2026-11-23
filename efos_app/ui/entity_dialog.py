@@ -1,21 +1,16 @@
 """Modal host for the shared inspector (legacy entry point, kept compatible)."""
 from __future__ import annotations
-
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
-
 from ..models import NodeRef
 from ..service import EFOSService
 from .inspector import InspectorPanel
 from .theme import c, enable_native_title_bar
 
-
 class EntityDialog(QDialog):
     mutated = pyqtSignal(str)
 
-    def __init__(
-        self, service: EFOSService, ref: NodeRef, parent: QWidget | None = None
-    ):
+    def __init__(self, service: EFOSService, ref: NodeRef, parent: QWidget | None = None):
         super().__init__(parent)
         self.service = service
         self.ref = ref
@@ -24,9 +19,7 @@ class EntityDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.resize(430, 850)
         self.setMinimumSize(420, 680)
-        self.setStyleSheet(
-            f"QDialog {{ background: {c('surface')}; border: 1px solid {c('border_hi')}; }}"
-        )
+        self.setStyleSheet(f"QDialog {{ background: {c('surface')}; border: 1px solid {c('border_hi')}; }}")
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -54,9 +47,7 @@ class EntityDialog(QDialog):
 
     def _toast(self, message: str, level: str) -> None:
         box = QMessageBox(self)
-        box.setIcon(
-            QMessageBox.Icon.Warning if level == "error" else QMessageBox.Icon.Information
-        )
+        box.setIcon(QMessageBox.Icon.Warning if level == "error" else QMessageBox.Icon.Information)
         box.setText(message)
         box.exec()
 

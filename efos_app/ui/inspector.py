@@ -25,13 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..errors import EFOSError
-from ..formatting import (
-    fmt_datetime,
-    fmt_relative,
-    recurrence_span,
-    schedule_span,
-    truncate,
-)
+from ..formatting import (fmt_datetime, fmt_relative, recurrence_span, schedule_span, truncate)
 from ..logic import (availability_state_text, availability_summary, condition_truth_label, gate_summary)
 from ..models import (
     Condition,
@@ -47,7 +41,7 @@ from ..models import (
 from ..service import EFOSService, WorkspaceView
 from .dialogs import (AvailabilityDialog, RecurrenceDialog, ScheduleConflictDialog, confirm_dialog)
 from .icons import icon
-from .theme import c, rgba, state_color
+from .theme import c, fs, rgba, state_color
 from .widgets import Badge, Divider, GreenCheckBox, IconButton, SectionLabel
 
 def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
@@ -174,8 +168,7 @@ class InspectorPanel(QFrame):
         else: self.render()
 
     # ------------------------------------------------------------------ notes
-    def has_pending_note(self) -> bool:
-        return bool(self._note_dirty and self._note_edit is not None)
+    def has_pending_note(self) -> bool: return bool(self._note_dirty and self._note_edit is not None)
 
     def commit_note(self, *, announce: bool = True) -> bool:
         if self.ref is None or self._note_edit is None: return True
@@ -187,8 +180,7 @@ class InspectorPanel(QFrame):
             self._note_edit.setPlainText(self._saved_note)
             self._loading = False
             self._note_dirty = False
-            if announce:
-                self.toast_requested.emit("Empty note edits are not saved. Use the trash icon to delete.", "info")
+            if announce: self.toast_requested.emit("Empty note edits are not saved. Use the trash icon to delete.", "info")
             return True
         try: saved = self.service.save_note(self.ref, text)
         except EFOSError as exc:
@@ -197,8 +189,7 @@ class InspectorPanel(QFrame):
         if saved:
             self._saved_note = text
             self._note_dirty = False
-            if announce:
-                self.toast_requested.emit("Note saved", "success")
+            if announce: self.toast_requested.emit("Note saved", "success")
         return True
 
     def _note_changed(self) -> None:
@@ -266,13 +257,13 @@ class InspectorPanel(QFrame):
         self.name_label.setToolTip("Click to rename")
         self.name_label.setStyleSheet(
             f"QLabel {{ background: transparent; border: 1px solid transparent; border-radius: 6px; "
-            f"color: {c('text')}; font-size: 17px; font-weight: 650; padding: 3px 4px; }}"
+            f"color: {c('text')}; font-size: {fs(17)}px; font-weight: 650; padding: 3px 4px; }}"
             f"QLabel:hover {{ border-color: {c('border')}; }}"
         )
         self.name_edit = QLineEdit(title)
         self.name_edit.setStyleSheet(
             f"QLineEdit {{ background: {c('input')}; border: 1px solid {c('accent')}; "
-            f"color: {c('text')}; font-size: 17px; font-weight: 650; padding: 3px 4px; }}"
+            f"color: {c('text')}; font-size: {fs(17)}px; font-weight: 650; padding: 3px 4px; }}"
         )
         self.name_edit.hide()
 
@@ -343,14 +334,13 @@ class InspectorPanel(QFrame):
                 )
             elif status.blockers:
                 msg = "Blocked · " + "; ".join(status.blockers[:3])
-                if len(status.blockers) > 3:
-                    msg += f"; and {len(status.blockers) - 3} more"
+                if len(status.blockers) > 3: msg += f"; and {len(status.blockers) - 3} more"
             else: msg = "Blocked · an unsatisfied dependency prevents Ready Status."
             lock = _wrap_label(QLabel(msg))
             lock.setStyleSheet(
                 f"color: {c('amber')}; background: {rgba('amber', 0.07)}; "
                 f"border: 1px solid {rgba('amber', 0.22)}; border-radius: 8px; "
-                "padding: 8px 10px; font-size: 10px;"
+                f"padding: 8px 10px; font-size: {fs(10)}px;"
             )
             self.content.addWidget(lock)
 
@@ -375,9 +365,7 @@ class InspectorPanel(QFrame):
             availability_row = QHBoxLayout()
             availability_row.setSpacing(7)
             edit_availability = QPushButton("Edit availability…")
-            edit_availability.clicked.connect(
-                lambda _=False, task_id=task.id: self._edit_availability(task_id)
-            )
+            edit_availability.clicked.connect(lambda _=False, task_id=task.id: self._edit_availability(task_id))
             availability_row.addWidget(edit_availability)
             availability_row.addStretch(1)
             self.content.addLayout(availability_row)
@@ -403,10 +391,8 @@ class InspectorPanel(QFrame):
         actions.addStretch(1)
         self.content.addLayout(actions)
 
-        if task.current_state.is_active:
-            self._render_schedule(task)
-        else:
-            self._render_recurrence(task)
+        if task.current_state.is_active: self._render_schedule(task)
+        else: self._render_recurrence(task)
 
     def _render_recurrence_controls(self, task: Task) -> None:
         self.content.addSpacing(4)
@@ -429,21 +415,15 @@ class InspectorPanel(QFrame):
                 check.styleSheet()
                 + f"QCheckBox::indicator:checked {{ image: url(data:image/png;base64,{b64}); }}"
             )
-        check.toggled.connect(
-            lambda checked, task_id=task.id: self._toggle_recurring(task_id, checked)
-        )
+        check.toggled.connect(lambda checked, task_id=task.id: self._toggle_recurring(task_id, checked))
         row.addWidget(check)
         row.addStretch(1)
         edit = QPushButton("Edit recurrence…" if task.recurrence else "Set recurrence…")
-        edit.clicked.connect(
-            lambda _=False, task_id=task.id: self._edit_recurrence(task_id)
-        )
+        edit.clicked.connect(lambda _=False, task_id=task.id: self._edit_recurrence(task_id))
         row.addWidget(edit)
         self.content.addLayout(row)
-        summary = _wrap_label(
-            QLabel(task.recurrence.summary() if task.recurrence else "Not recurring")
-        )
-        summary.setStyleSheet(f"color: {c('faint')}; font-size: 10px;")
+        summary = _wrap_label(QLabel(task.recurrence.summary() if task.recurrence else "Not recurring"))
+        summary.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px;")
         self.content.addWidget(summary)
 
     def _render_recurrence(self, task: Task) -> None:
@@ -451,11 +431,9 @@ class InspectorPanel(QFrame):
         self._render_recurrence_controls(task)
 
     def _toggle_recurring(self, task_id: str, checked: bool) -> None:
-        if self._loading:
-            return
+        if self._loading: return
         task = self.view.snapshot.tasks.get(task_id) if self.view else None
-        if task is None:
-            return
+        if task is None: return
         if checked and task.recurrence is None:
             self._edit_recurrence(task_id, force_new=True)
             return
@@ -466,11 +444,9 @@ class InspectorPanel(QFrame):
                 "The stored recurrence rule will be deleted.",
                 confirm_text="Remove",
             ):
-                if self.view is not None:
-                    self.render()
+                if self.view is not None: self.render()
                 return
-            try:
-                self.service.delete_rule(task_id)
+            try: self.service.delete_rule(task_id)
             except EFOSError as exc:
                 self.toast_requested.emit(str(exc), "error")
                 return
@@ -481,22 +457,17 @@ class InspectorPanel(QFrame):
         start, end = self._read_schedule()
         if start is None or end is None:
             task = self.view.snapshot.tasks.get(task_id) if self.view else None
-            if task and task.scheduled_start and task.scheduled_end:
-                start, end = task.scheduled_start, task.scheduled_end
+            if task and task.scheduled_start and task.scheduled_end: start, end = task.scheduled_start, task.scheduled_end
             else:
                 start = datetime.now().replace(minute=0, second=0, microsecond=0)
                 end = start + timedelta(hours=1)
         if end <= start:
-            self.toast_requested.emit(
-                "Schedule End must be after Start before setting recurrence.", "error"
-            )
-            if self.view is not None:
-                self.render()
+            self.toast_requested.emit("Schedule End must be after Start before setting recurrence.", "error")
+            if self.view is not None: self.render()
             return
         dialog = RecurrenceDialog(rule, self, window_start=start, window_end=end)
         if not dialog.exec():
-            if self.view is not None:
-                self.render()
+            if self.view is not None: self.render()
             return
         values = dialog.values()
         try:
@@ -526,14 +497,11 @@ class InspectorPanel(QFrame):
 
     def _edit_availability(self, task_id: str) -> None:
         task = self.view.snapshot.tasks.get(task_id) if self.view else None
-        if task is None:
-            return
+        if task is None: return
         self.commit_note()
         dialog = AvailabilityDialog(task.availability, self)
-        if not dialog.exec():
-            return
-        try:
-            self.service.save_task_availability(task_id, dialog.values())
+        if not dialog.exec(): return
+        try: self.service.save_task_availability(task_id, dialog.values())
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -577,12 +545,11 @@ class InspectorPanel(QFrame):
                 "checked before saving; Force Save preserves the local block."
             )
         )
-        hint.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+        hint.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
         self.content.addWidget(hint)
 
     def _read_schedule(self) -> tuple[datetime | None, datetime | None]:
-        if not self._schedule_start or not self._schedule_end:
-            return None, None
+        if not self._schedule_start or not self._schedule_end: return None, None
         return (
             self._schedule_start.dateTime().toPyDateTime(),
             self._schedule_end.dateTime().toPyDateTime(),
@@ -590,32 +557,25 @@ class InspectorPanel(QFrame):
 
     def _save_schedule(self, task_id: str) -> None:
         start, end = self._read_schedule()
-        if start is None or end is None:
-            return
+        if start is None or end is None: return
         if end <= start:
             self.toast_requested.emit("Schedule end must be after its start.", "error")
             return
-        try:
-            conflicts = self.service.schedule_collisions(
-                start, end, exclude_task_id=task_id
-            )
+        try: conflicts = self.service.schedule_collisions(start, end, exclude_task_id=task_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         if conflicts:
             dialog = ScheduleConflictDialog(conflicts, self)
-            if not dialog.exec() or not dialog.force:
-                return
-        try:
-            self.service.save_task_schedule(task_id, start, end)
+            if not dialog.exec() or not dialog.force: return
+        try: self.service.save_task_schedule(task_id, start, end)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Schedule saved")
 
     def _clear_schedule(self, task_id: str) -> None:
-        try:
-            self.service.save_task_schedule(task_id, None, None)
+        try: self.service.save_task_schedule(task_id, None, None)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -623,8 +583,7 @@ class InspectorPanel(QFrame):
 
     def _complete_task(self, task_id: str) -> None:
         self.commit_note()
-        try:
-            self.service.complete_task(task_id)
+        try: self.service.complete_task(task_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -632,16 +591,14 @@ class InspectorPanel(QFrame):
 
     def _defer_task(self, task_id: str) -> None:
         self.commit_note()
-        try:
-            self.service.defer_task(task_id)
+        try: self.service.defer_task(task_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Task deferred")
 
     def _reopen_task(self, task_id: str) -> None:
-        try:
-            self.service.reopen_task(task_id)
+        try: self.service.reopen_task(task_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -655,12 +612,7 @@ class InspectorPanel(QFrame):
             self._empty()
             return
         self.content.addWidget(
-            self._header(
-                project.name,
-                "PROJECT",
-                project.current_state.value,
-                project.current_state.value,
-            )
+            self._header(project.name, "PROJECT", project.current_state.value, project.current_state.value)
         )
         undefined = project.resolution_conditions_unknown
         if undefined:
@@ -673,7 +625,7 @@ class InspectorPanel(QFrame):
             banner.setStyleSheet(
                 f"color: {c('amber')}; background: {rgba('amber', 0.07)}; "
                 f"border: 1px solid {rgba('amber', 0.24)}; border-radius: 8px; "
-                "padding: 8px 10px; font-size: 10px;"
+                f"padding: 8px 10px; font-size: {fs(10)}px;"
             )
             self.content.addWidget(banner)
         else:
@@ -686,7 +638,7 @@ class InspectorPanel(QFrame):
             defined.setStyleSheet(
                 f"color: {c('green')}; background: {rgba('green', 0.06)}; "
                 f"border: 1px solid {rgba('green', 0.20)}; border-radius: 8px; "
-                "padding: 7px 10px; font-size: 10px;"
+                f"padding: 7px 10px; font-size: {fs(10)}px;"
             )
             self.content.addWidget(defined)
 
@@ -705,8 +657,7 @@ class InspectorPanel(QFrame):
             ("Satisfied", satisfied),
             ("Created", fmt_relative(project.created_at)),
         ]
-        for key, value in meta:
-            self.content.addWidget(_kv(key, value))
+        for key, value in meta: self.content.addWidget(_kv(key, value))
 
         actions = QHBoxLayout()
         actions.setSpacing(7)
@@ -728,16 +679,14 @@ class InspectorPanel(QFrame):
 
     def _shelve(self, project_id: str) -> None:
         self.commit_note()
-        try:
-            self.service.shelve_project(project_id)
+        try: self.service.shelve_project(project_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Project shelved")
 
     def _stall(self, project_id: str) -> None:
-        try:
-            self.service.stall_project(project_id)
+        try: self.service.stall_project(project_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -745,10 +694,8 @@ class InspectorPanel(QFrame):
 
     def _activate(self, project_id: str, state: ProjectState) -> None:
         try:
-            if state is ProjectState.SHELVED:
-                self.service.unshelve_project(project_id)
-            else:
-                self.service.reactivate_project(project_id)
+            if state is ProjectState.SHELVED: self.service.unshelve_project(project_id)
+            else: self.service.reactivate_project(project_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -787,13 +734,11 @@ class InspectorPanel(QFrame):
             button.setCheckable(True)
             button.setChecked(value is target)
             button.setStyleSheet(
-                f"QPushButton {{ color: {c(tone)}; font-weight: 700; font-size: 10px; }}"
+                f"QPushButton {{ color: {c(tone)}; font-weight: 700; font-size: {fs(10)}px; }}"
                 f"QPushButton:checked {{ background: {rgba(tone, 0.14)}; "
                 f"border-color: {c(tone)}; }}"
             )
-            button.clicked.connect(
-                lambda _=False, cid=condition.id, v=target: self._set_condition(cid, v)
-            )
+            button.clicked.connect(lambda _=False, cid=condition.id, v=target: self._set_condition(cid, v))
             row.addWidget(button)
         row.addStretch(1)
         self.content.addLayout(row)
@@ -811,19 +756,16 @@ class InspectorPanel(QFrame):
                         f"{truncate(self.view.snapshot.get_name(target), 28)}"
                     )
                 )
-                name.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+                name.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px;")
                 row_layout.addWidget(name, 1)
                 remove = IconButton("close", "Detach precondition", size=12)
                 remove.setFixedSize(24, 24)
-                remove.clicked.connect(
-                    lambda _=False, t=target, cid=condition.id: self._remove_precondition(t, cid)
-                )
+                remove.clicked.connect(lambda _=False, t=target, cid=condition.id: self._remove_precondition(t, cid))
                 row_layout.addWidget(remove)
                 self.content.addWidget(row_frame)
 
     def _set_condition(self, condition_id: str, value: bool | None) -> None:
-        try:
-            self.service.set_condition_value(condition_id, value)
+        try: self.service.set_condition_value(condition_id, value)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -831,8 +773,7 @@ class InspectorPanel(QFrame):
 
     # ------------------------------------------------------------ dependencies
     def _render_dependencies(self) -> None:
-        if self.ref is None or self.view is None or self.ref.kind is NodeKind.CONDITION:
-            return
+        if self.ref is None or self.view is None or self.ref.kind is NodeKind.CONDITION: return
         snapshot = self.view.snapshot
         evaluation = self.view.evaluation
         editable = True
@@ -882,8 +823,7 @@ class InspectorPanel(QFrame):
             self.content.addWidget(_sub_label("PRECONDITIONS · 3VL EXTERNAL FACTS"))
             for condition_id in preconditions:
                 condition = snapshot.conditions.get(condition_id)
-                if condition is None:
-                    continue
+                if condition is None: continue
                 status = evaluation.for_ref(self.ref)
                 value = status.precondition_values.get(condition_id) if status else None
                 row = QFrame()
@@ -897,16 +837,12 @@ class InspectorPanel(QFrame):
                 badge.setMinimumWidth(62)
                 layout.addWidget(badge)
                 name = _wrap_label(QLabel(truncate(condition.display_name, 28)))
-                name.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+                name.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px;")
                 layout.addWidget(name, 1)
                 if editable:
                     remove = IconButton("close", "Detach precondition", size=12)
                     remove.setFixedSize(24, 24)
-                    remove.clicked.connect(
-                        lambda _=False, cid=condition_id: self._remove_precondition(
-                            self.ref, cid
-                        )
-                    )
+                    remove.clicked.connect(lambda _=False, cid=condition_id: self._remove_precondition(self.ref, cid))
                     layout.addWidget(remove)
                 self.content.addWidget(row)
 
@@ -928,17 +864,13 @@ class InspectorPanel(QFrame):
                         f"{truncate(snapshot.get_name(source), 24)}"
                     )
                 )
-                text.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+                text.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px;")
                 text.setToolTip(f"Current state: {snapshot.get_state(source)}")
                 layout.addWidget(text, 1)
                 if editable:
                     remove = IconButton("close", "Detach prerequisite", size=12)
                     remove.setFixedSize(24, 24)
-                    remove.clicked.connect(
-                        lambda _=False, src=source: self._remove_prerequisite(
-                            self.ref, src
-                        )
-                    )
+                    remove.clicked.connect(lambda _=False, src=source: self._remove_prerequisite(self.ref, src))
                     layout.addWidget(remove)
                 self.content.addWidget(row)
 
@@ -948,14 +880,8 @@ class InspectorPanel(QFrame):
                 snapshot.conditions.values(),
                 key=lambda item: item.display_name.casefold(),
             ):
-                if condition.id in preconditions:
-                    continue
-                candidates.append(
-                    (
-                        f"Condition · {condition.display_name}",
-                        ("precondition", condition.id),
-                    )
-                )
+                if condition.id in preconditions: continue
+                candidates.append((f"Condition · {condition.display_name}", ("precondition", condition.id)))
             for ref in sorted(
                 (
                     ref
@@ -967,14 +893,8 @@ class InspectorPanel(QFrame):
                     snapshot.get_name(item).casefold(),
                 ),
             ):
-                if ref in prerequisites:
-                    continue
-                candidates.append(
-                    (
-                        f"{ref.kind.label} · {snapshot.get_name(ref)}",
-                        ("prerequisite", ref.key),
-                    )
-                )
+                if ref in prerequisites: continue
+                candidates.append((f"{ref.kind.label} · {snapshot.get_name(ref)}", ("prerequisite", ref.key)))
 
             if count == 0:
                 self.content.addWidget(
@@ -987,17 +907,12 @@ class InspectorPanel(QFrame):
                 combo = QComboBox()
                 # Long candidate titles must never widen the Inspector. The
                 # combo shrinks to the available row width and elides instead.
-                combo.setSizeAdjustPolicy(
-                    QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-                )
+                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
                 combo.setMinimumContentsLength(14)
                 combo.setMinimumWidth(0)
-                combo.setSizePolicy(
-                    QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
-                )
+                combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
                 combo.setMaxVisibleItems(12)
-                for label, payload in candidates:
-                    combo.addItem(label, payload)
+                for label, payload in candidates: combo.addItem(label, payload)
                 combo.view().setMinimumWidth(0)
                 combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
                 combo.setToolTip(
@@ -1009,9 +924,7 @@ class InspectorPanel(QFrame):
                 add_row.addWidget(combo, 1)
                 add = QPushButton("Attach")
                 add.setToolTip("Attach the selected dependency to this record")
-                add.clicked.connect(
-                    lambda _=False, cb=combo: self._attach_from_combo(cb.currentData())
-                )
+                add.clicked.connect(lambda _=False, cb=combo: self._attach_from_combo(cb.currentData()))
                 add_row.addWidget(add, 0)
                 self.content.addLayout(add_row)
 
@@ -1020,50 +933,41 @@ class InspectorPanel(QFrame):
             self.content.addWidget(_sub_label("UNRESOLVED BARRIERS"))
             for blocker in status.blockers[:6]:
                 line = _wrap_label(QLabel(f"• {blocker}"))
-                line.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+                line.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
                 self.content.addWidget(line)
 
     def _attach_from_combo(self, payload: tuple[str, str] | None) -> None:
-        if not payload or self.ref is None:
-            return
+        if not payload or self.ref is None: return
         kind, value = payload
-        if kind == "precondition":
-            self._add_precondition(value)
-        else:
-            self._add_prerequisite(value)
+        if kind == "precondition": self._add_precondition(value)
+        else: self._add_prerequisite(value)
 
     def _add_precondition(self, condition_id: str | None) -> None:
-        if not condition_id or self.ref is None:
-            return
-        try:
-            self.service.connect(NodeRef(NodeKind.CONDITION, condition_id), self.ref)
+        if not condition_id or self.ref is None: return
+        try: self.service.connect(NodeRef(NodeKind.CONDITION, condition_id), self.ref)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Precondition attached")
 
     def _remove_precondition(self, target: NodeRef, condition_id: str) -> None:
-        try:
-            self.service.remove_precondition(target.kind, target.id, condition_id)
+        try: self.service.remove_precondition(target.kind, target.id, condition_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Precondition detached · downstream re-evaluated")
 
     def _add_prerequisite(self, source_key: str | None) -> None:
-        if not source_key or self.ref is None:
-            return
+        if not source_key or self.ref is None: return
         source = NodeRef.parse(source_key)
-        try:
-            self.service.connect(source, self.ref)
+        try: self.service.connect(source, self.ref)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.mutated.emit("Prerequisite attached")
 
     def _remove_prerequisite(self, target: NodeRef, source: NodeRef) -> None:
-        try:
-            self.service.remove_prerequisite(target.kind, target.id, source)
+        try: self.service.remove_prerequisite(target.kind, target.id, source)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -1071,15 +975,14 @@ class InspectorPanel(QFrame):
 
     # ------------------------------------------------------------------ notes
     def _render_notes(self) -> None:
-        if self.ref is None:
-            return
+        if self.ref is None: return
         self.content.addWidget(Divider())
         header = QHBoxLayout()
         header.setSpacing(6)
         header.addWidget(SectionLabel("Note"))
         header.addStretch(1)
         self.note_status = QLabel("Saved")
-        self.note_status.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+        self.note_status.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
         header.addWidget(self.note_status)
         trash = IconButton("trash", "Delete note", size=14)
         trash.setFixedSize(26, 26)
@@ -1100,8 +1003,7 @@ class InspectorPanel(QFrame):
         self._note_dirty = False
         self.content.addWidget(self._note_edit)
 
-    def _on_note_focus_lost(self) -> None:
-        QTimer.singleShot(0, lambda: self.commit_note(announce=False))
+    def _on_note_focus_lost(self) -> None: QTimer.singleShot(0, lambda: self.commit_note(announce=False))
 
     # ------------------------------------------------------------- docs
     def _render_docs(self) -> None:
@@ -1115,7 +1017,7 @@ class InspectorPanel(QFrame):
                 "dependency must pass; no manual status override exists."
             )
         )
-        model.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+        model.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
         self.content.addWidget(model)
         self.content.addWidget(SectionLabel("Canvas gestures"))
         guide = _wrap_label(
@@ -1132,7 +1034,7 @@ class InspectorPanel(QFrame):
                 "membership."
             )
         )
-        guide.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+        guide.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
         self.content.addWidget(guide)
         gestures = _wrap_label(
             QLabel(
@@ -1140,14 +1042,13 @@ class InspectorPanel(QFrame):
                 "remove a dependency · Drag from the right-hand port to connect."
             )
         )
-        gestures.setStyleSheet(f"color: {c('faint')}; font-size: 9px;")
+        gestures.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px;")
         self.content.addWidget(gestures)
 
     # ---------------------------------------------------------------- delete
     def _render_delete_for_ref(self) -> None:
         """Render the destructive action at the very bottom of the inspector."""
-        if self.ref is None or self.view is None:
-            return
+        if self.ref is None or self.view is None: return
         name = self.view.snapshot.get_name(self.ref)
         noun = {
             NodeKind.TASK: "task",
@@ -1165,22 +1066,17 @@ class InspectorPanel(QFrame):
         self.content.addWidget(delete)
 
     def _delete_entity(self, noun: str, name: str) -> None:
-        if self.ref is None:
-            return
+        if self.ref is None: return
         self.commit_note()
         if not confirm_dialog(
             self,
             f"Delete {noun}?",
             f"“{name}” and all of its dependency links and note will be removed permanently.",
-        ):
-            return
+        ): return
         try:
-            if self.ref.kind is NodeKind.TASK:
-                self.service.delete_task(self.ref.id)
-            elif self.ref.kind is NodeKind.PROJECT:
-                self.service.delete_project(self.ref.id)
-            else:
-                self.service.delete_condition(self.ref.id)
+            if self.ref.kind is NodeKind.TASK: self.service.delete_task(self.ref.id)
+            elif self.ref.kind is NodeKind.PROJECT: self.service.delete_project(self.ref.id)
+            else: self.service.delete_condition(self.ref.id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -1201,11 +1097,11 @@ def _kv(key: str, value: str) -> QWidget:
     layout.setContentsMargins(0, 1, 0, 1)
     layout.setSpacing(10)
     label = QLabel(key)
-    label.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+    label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
     label.setMinimumWidth(88)
     label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
     text = _wrap_label(QLabel(value))
-    text.setStyleSheet(f"color: {c('text_soft')}; font-size: 11px;")
+    text.setStyleSheet(f"color: {c('text_soft')}; font-size: {fs(11)}px;")
     text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     layout.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
     layout.addWidget(text, 1)
@@ -1217,7 +1113,7 @@ def _kv_widget(key: str, widget: QWidget) -> QWidget:
     layout.setContentsMargins(0, 1, 0, 1)
     layout.setSpacing(10)
     label = QLabel(key)
-    label.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+    label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
     label.setMinimumWidth(52)
     layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
     layout.addWidget(widget, 1)
@@ -1225,12 +1121,10 @@ def _kv_widget(key: str, widget: QWidget) -> QWidget:
 
 def _sub_label(text: str) -> QLabel:
     label = QLabel(text)
-    label.setStyleSheet(
-        f"color: {c('faint')}; font-size: 9px; font-weight: 700; letter-spacing: 0.8px;"
-    )
+    label.setStyleSheet(f"color: {c('faint')}; font-size: {fs(9)}px; font-weight: 700; letter-spacing: 0.8px;")
     return label
 
 def _empty_line(text: str) -> QLabel:
     label = _wrap_label(QLabel(text))
-    label.setStyleSheet(f"color: {c('faint')}; font-size: 10px; font-style: italic;")
+    label.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px; font-style: italic;")
     return label

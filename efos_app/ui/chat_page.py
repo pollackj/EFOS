@@ -23,7 +23,7 @@ from ..rag_service import PRIORITY_PROMPT, ChatAnswer, RagPipeline
 from ..service import EFOSService, WorkspaceView
 from .dialogs import CustomQueryDialog, confirm_dialog
 from .icons import icon
-from .theme import c, rgba
+from .theme import c, fs, rgba
 from .widgets import (
     Badge,
     Divider,
@@ -53,8 +53,7 @@ def _clear_layout(layout) -> None:  # type: ignore[no-untyped-def]
             widget.hide()
             widget.setParent(None)
             widget.deleteLater()
-        elif child is not None:
-            _clear_layout(child)
+        elif child is not None: _clear_layout(child)
 
 class Composer(QPlainTextEdit):
     submitted = pyqtSignal()
@@ -124,7 +123,7 @@ class ChatPage(QWidget):
         self._render_empty_stream()
         layout.addWidget(self._composer_frame())
         self.disclaimer = QLabel(DISCLAIMER)
-        self.disclaimer.setStyleSheet(f"color: {c('faint')}; font-size: 10px; padding: 0 4px;")
+        self.disclaimer.setStyleSheet(f"color: {c('faint')}; font-size: {fs(10)}px; padding: 0 4px;")
         self.disclaimer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.disclaimer)
         return card
@@ -239,7 +238,7 @@ class ChatPage(QWidget):
         envelope_layout.setContentsMargins(11, 9, 11, 9)
         envelope_layout.setSpacing(3)
         self.envelope_label = QLabel("")
-        self.envelope_label.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+        self.envelope_label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
         self.envelope_label.setWordWrap(True)
         self.envelope_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         envelope_layout.addWidget(self.envelope_label)
@@ -253,7 +252,7 @@ class ChatPage(QWidget):
         pipeline_layout.setContentsMargins(11, 9, 11, 9)
         pipeline_layout.setSpacing(3)
         self.pipeline_label = QLabel("Idle · two model calls per message.")
-        self.pipeline_label.setStyleSheet(f"color: {c('muted')}; font-size: 10px;")
+        self.pipeline_label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(10)}px;")
         self.pipeline_label.setWordWrap(True)
         self.pipeline_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         pipeline_layout.addWidget(self.pipeline_label)
@@ -274,13 +273,11 @@ class ChatPage(QWidget):
         self._refresh_threads()
         self._refresh_custom_queries()
         self._refresh_envelope()
-        if self.thread_id is None and not self.messages:
-            self._render_empty_stream()
+        if self.thread_id is None and not self.messages: self._render_empty_stream()
         self._schedule_scroll_to_bottom()
 
     def shutdown(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(1500)
+        if self._worker is not None and self._worker.isRunning(): self._worker.wait(1500)
 
     # ------------------------------------------------------------------ scroll
     def _scroll_to_bottom(self) -> None:
@@ -293,8 +290,7 @@ class ChatPage(QWidget):
 
     # ------------------------------------------------------------------ threads
     def _refresh_threads(self) -> None:
-        try:
-            threads = self.service.threads()
+        try: threads = self.service.threads()
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -302,46 +298,39 @@ class ChatPage(QWidget):
         self.thread_combo.clear()
         for thread in threads:
             self.thread_combo.addItem(f"{thread.title}  ·  {thread.message_count} msg", thread.id)
-        if not threads:
-            self.thread_combo.addItem("No conversations yet — send a query", None)
+        if not threads: self.thread_combo.addItem("No conversations yet — send a query", None)
         if self.thread_id:
             index = self.thread_combo.findData(self.thread_id)
-            if index >= 0:
-                self.thread_combo.setCurrentIndex(index)
+            if index >= 0: self.thread_combo.setCurrentIndex(index)
         self.thread_combo.blockSignals(False)
         if self.thread_id is None and threads:
             self.thread_id = threads[0].id
             self._load_thread(self.thread_id, render=True)
         elif self.thread_id and self.thread_combo.findData(self.thread_id) < 0:
             self.thread_id = threads[0].id if threads else None
-            if self.thread_id:
-                self._load_thread(self.thread_id, render=True)
+            if self.thread_id: self._load_thread(self.thread_id, render=True)
             else:
                 self.messages = []
                 self._render_empty_stream()
 
     def _thread_changed(self, index: int) -> None:
         thread_id = self.thread_combo.itemData(index)
-        if not thread_id:
-            return
+        if not thread_id: return
         self.thread_id = thread_id
         self._load_thread(thread_id, render=True)
 
     def _load_thread(self, thread_id: str, *, render: bool = True) -> None:
-        try:
-            thread, messages = self.service.load_thread(thread_id)
+        try: thread, messages = self.service.load_thread(thread_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.thread_id = thread_id
         self.messages = messages
-        if render:
-            self._render_messages()
+        if render: self._render_messages()
         self._schedule_scroll_to_bottom()
 
     def _new_thread(self) -> None:
-        try:
-            thread_id = self.service.create_thread()
+        try: thread_id = self.service.create_thread()
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -357,48 +346,38 @@ class ChatPage(QWidget):
         self.composer.setFocus()
 
     def _rename_thread(self) -> None:
-        if not self.thread_id:
-            return
+        if not self.thread_id: return
         current = self.thread_combo.currentText().split("  ·  ")[0]
         title, ok = QInputDialog.getText(self, "Rename conversation", "Title", text=current)
-        if not ok or not title.strip():
-            return
-        try:
-            self.service.rename_thread(self.thread_id, title.strip())
+        if not ok or not title.strip(): return
+        try: self.service.rename_thread(self.thread_id, title.strip())
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self._refresh_threads()
 
     def _delete_thread(self) -> None:
-        if not self.thread_id:
-            return
-        if not confirm_dialog(self, "Delete conversation?", "The stored message history will be removed."):
-            return
-        try:
-            self.service.delete_thread(self.thread_id)
+        if not self.thread_id: return
+        if not confirm_dialog(self, "Delete conversation?", "The stored message history will be removed."): return
+        try: self.service.delete_thread(self.thread_id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self.thread_id = None
         self.messages = []
         self._refresh_threads()
-        if self.thread_id is None:
-            self._render_empty_stream()
+        if self.thread_id is None: self._render_empty_stream()
 
     # ----------------------------------------------------------------- sending
     def _send_current(self) -> None:
         text = self.composer.toPlainText().strip()
-        if not text:
-            return
+        if not text: return
         self.composer.clear()
         self._submit(text)
 
     def _ensure_thread(self) -> bool:
-        if self.thread_id:
-            return True
-        try:
-            self.thread_id = self.service.create_thread()
+        if self.thread_id: return True
+        try: self.thread_id = self.service.create_thread()
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return False
@@ -409,14 +388,11 @@ class ChatPage(QWidget):
 
     def _submit(self, text: str, *, label: str | None = None) -> None:
         text = (text or "").strip()
-        if not text or self._worker is not None:
-            return
-        if not self._ensure_thread():
-            return
+        if not text or self._worker is not None: return
+        if not self._ensure_thread(): return
         assert self.thread_id is not None and self.view is not None
         metadata = {"query_label": label} if label else {}
-        try:
-            self.service.append_message(self.thread_id, "user", text, metadata)
+        try: self.service.append_message(self.thread_id, "user", text, metadata)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -440,10 +416,8 @@ class ChatPage(QWidget):
         self.send_button.setEnabled(True)
         self._worker_thread_id = None
         if self._pending is not None:
-            try:
-                self._pending.deleteLater()
-            except RuntimeError:
-                pass
+            try: self._pending.deleteLater()
+            except RuntimeError: pass
             self._pending = None
         if self._worker is not None:
             self._worker.deleteLater()
@@ -451,8 +425,7 @@ class ChatPage(QWidget):
 
     def _answer_ready(self, answer: ChatAnswer) -> None:
         target_thread = self._worker_thread_id or self.thread_id
-        if target_thread is None:
-            return
+        if target_thread is None: return
         try:
             self.service.append_message(
                 target_thread,
@@ -474,8 +447,7 @@ class ChatPage(QWidget):
             self.toast_requested.emit(str(exc), "error")
             return
         self._update_pipeline(answer)
-        if self.thread_id == target_thread:
-            self._load_thread(target_thread, render=True)
+        if self.thread_id == target_thread: self._load_thread(target_thread, render=True)
         self._refresh_threads()
 
     def _answer_failed(self, message: str) -> None:
@@ -483,13 +455,10 @@ class ChatPage(QWidget):
         if target_thread is None:
             self.toast_requested.emit(message, "error")
             return
-        try:
-            self.service.append_message(target_thread, "assistant", f"Request failed: {message}", {"route": "ERROR"})
-        except EFOSError:
-            pass
+        try: self.service.append_message(target_thread, "assistant", f"Request failed: {message}", {"route": "ERROR"})
+        except EFOSError: pass
         self.toast_requested.emit(message, "error")
-        if self.thread_id == target_thread:
-            self._load_thread(target_thread, render=True)
+        if self.thread_id == target_thread: self._load_thread(target_thread, render=True)
         self._refresh_threads()
         self.pipeline_label.setText(f"Pipeline failed · {message}")
 
@@ -546,8 +515,7 @@ class ChatPage(QWidget):
 
     def _sync_user_bubble_widths(self) -> None:
         stream_w = self.stream_scroll.viewport().width()
-        if stream_w <= 100:
-            return
+        if stream_w <= 100: return
         max_user_w = int(min(stream_w, 960) * 0.72)
         for frame, text, raw in getattr(self, "_user_bubbles", []):
             try:
@@ -559,8 +527,7 @@ class ChatPage(QWidget):
                 else:
                     text.setWordWrap(False)
                     text.setMinimumWidth(0)
-            except RuntimeError:
-                continue
+            except RuntimeError: continue
 
     def _render_messages(self) -> None:
         self._user_bubbles = []
@@ -568,8 +535,7 @@ class ChatPage(QWidget):
         if not self.messages:
             self._render_empty_stream()
             return
-        for message in self.messages:
-            self.stream.addWidget(self._bubble(message))
+        for message in self.messages: self.stream.addWidget(self._bubble(message))
         self.stream.addStretch(1)
         self._sync_user_bubble_widths()
         # One deferred pass after layout, then a short follow-up so wrapped
@@ -595,19 +561,13 @@ class ChatPage(QWidget):
         header = QHBoxLayout()
         header.setSpacing(6)
         speaker = QLabel("ASSISTANT" if assistant else "YOU")
-        speaker.setStyleSheet(f"color: {c('faint')}; font-size: 8px; font-weight: 700; letter-spacing: 1px;")
+        speaker.setStyleSheet(f"color: {c('faint')}; font-size: {fs(8)}px; font-weight: 700; letter-spacing: 1px;")
         header.addWidget(speaker)
         route = meta.get("route")
         if assistant and route:
-            tone = {
-                "QUERY": "accent",
-                "CHAT": "unknown",
-                "PRIORITIES": "ready",
-                "ERROR": "false",
-            }.get(str(route), "unknown")
+            tone = {"QUERY": "accent", "CHAT": "unknown", "PRIORITIES": "ready", "ERROR": "false"}.get(str(route), "unknown")
             header.addWidget(Badge(str(route), tone))
-        if assistant and meta.get("query_label"):
-            header.addWidget(Badge(str(meta["query_label"])[:28], "unknown"))
+        if assistant and meta.get("query_label"): header.addWidget(Badge(str(meta["query_label"])[:28], "unknown"))
         header.addStretch(1)
         layout.addLayout(header)
 
@@ -615,20 +575,19 @@ class ChatPage(QWidget):
         text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         text.setStyleSheet(
             f"color: {c('text_soft') if assistant else c('text')}; "
-            "font-size: 12.5px; line-height: 1.45;"
+            f"font-size: {fs(13)}px; line-height: 1.45;"
         )
 
         if assistant:
             text.setWordWrap(True)
             text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        else:
-            self._user_bubbles.append((frame, text, message.content))
+        else: self._user_bubbles.append((frame, text, message.content))
 
         layout.addWidget(text)
 
         if assistant and meta.get("route") == "QUERY" and meta.get("sql"):
             disclosure = QLabel(f"SQL · {meta.get('title') or 'query'}")
-            disclosure.setStyleSheet(f"color: {c('accent')}; font-size: 9px;")
+            disclosure.setStyleSheet(f"color: {c('accent')}; font-size: {fs(9)}px;")
             disclosure.setToolTip(str(meta.get("sql"))[:1200])
             layout.addWidget(disclosure)
 
@@ -650,7 +609,7 @@ class ChatPage(QWidget):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(13, 10, 13, 10)
         label = QLabel("Routing the request through the two-pass pipeline…")
-        label.setStyleSheet(f"color: {c('muted')}; font-size: 11px;")
+        label.setStyleSheet(f"color: {c('muted')}; font-size: {fs(11)}px;")
         layout.addWidget(label)
         holder = QWidget()
         holder_layout = QHBoxLayout(holder)
@@ -663,8 +622,7 @@ class ChatPage(QWidget):
 
     # ----------------------------------------------------------- custom queries
     def _refresh_custom_queries(self) -> None:
-        try:
-            self.cached_queries = self.service.custom_queries()
+        try: self.cached_queries = self.service.custom_queries()
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -678,8 +636,7 @@ class ChatPage(QWidget):
             hint.setWordWrap(True)
             self.custom_layout.addWidget(hint)
             return
-        for index, query in enumerate(self.cached_queries):
-            self.custom_layout.addWidget(self._custom_row(index, query))
+        for index, query in enumerate(self.cached_queries): self.custom_layout.addWidget(self._custom_row(index, query))
 
     def _custom_row(self, index: int, query) -> QWidget:  # type: ignore[no-untyped-def]
         frame = QFrame()
@@ -696,7 +653,7 @@ class ChatPage(QWidget):
         button.setToolTip(query.prompt)
         button.setStyleSheet(
             f"QPushButton {{ text-align: left; color: {c('text_soft')}; "
-            "font-size: 11px; padding: 4px 2px; border: none; }}"
+            f"font-size: {fs(11)}px; padding: 4px 2px; border: none; }}"
             f"QPushButton:hover {{ color: {c('text')}; }}"
         )
         button.clicked.connect(lambda _=False, label=query.label, prompt=query.prompt: self._submit(prompt, label=label))
@@ -723,11 +680,9 @@ class ChatPage(QWidget):
 
     def _new_custom_query(self) -> None:
         dialog = CustomQueryDialog(parent=self)
-        if not dialog.exec():
-            return
+        if not dialog.exec(): return
         label, prompt = dialog.values()
-        try:
-            self.service.create_custom_query(label, prompt)
+        try: self.service.create_custom_query(label, prompt)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -735,29 +690,24 @@ class ChatPage(QWidget):
 
     def _edit_custom(self, query) -> None:  # type: ignore[no-untyped-def]
         dialog = CustomQueryDialog(query.label, query.prompt, self)
-        if not dialog.exec():
-            return
+        if not dialog.exec(): return
         label, prompt = dialog.values()
-        try:
-            self.service.update_custom_query(query.id, label=label, prompt=prompt, favorite=query.favorite)
+        try: self.service.update_custom_query(query.id, label=label, prompt=prompt, favorite=query.favorite)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self._refresh_custom_queries()
 
     def _delete_custom(self, query) -> None:  # type: ignore[no-untyped-def]
-        if not confirm_dialog(self, "Delete custom query?", f"“{query.label}” will be removed."):
-            return
-        try:
-            self.service.delete_custom_query(query.id)
+        if not confirm_dialog(self, "Delete custom query?", f"“{query.label}” will be removed."): return
+        try: self.service.delete_custom_query(query.id)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
         self._refresh_custom_queries()
 
     def _toggle_favorite(self, query_id: str, favorite: bool) -> None:
-        try:
-            self.service.set_custom_query_favorite(query_id, favorite)
+        try: self.service.set_custom_query_favorite(query_id, favorite)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -765,12 +715,10 @@ class ChatPage(QWidget):
 
     def _move_custom(self, index: int, delta: int) -> None:
         target = index + delta
-        if not 0 <= target < len(self.cached_queries):
-            return
+        if not 0 <= target < len(self.cached_queries): return
         order = [query.id for query in self.cached_queries]
         order[index], order[target] = order[target], order[index]
-        try:
-            self.service.reorder_custom_queries(order)
+        try: self.service.reorder_custom_queries(order)
         except EFOSError as exc:
             self.toast_requested.emit(str(exc), "error")
             return
@@ -778,8 +726,7 @@ class ChatPage(QWidget):
 
     # --------------------------------------------------------------- envelope
     def _refresh_envelope(self) -> None:
-        if self.view is None:
-            return
+        if self.view is None: return
         metrics = self.service.context_metrics(self.view)
         self.envelope_label.setText(
             "SCHEMA public · explicit dependency model\n"
